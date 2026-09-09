@@ -25,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1"
 indexmap = "2"
 json5 = "~0.4"
 globset = "~0.4"
@@ -45,6 +46,7 @@ libc = "0.2"
 unicode-width = "~0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rmcp = { version = "3.2", features = ["server", "client", "macros", "transport-io", "transport-child-process", "transport-async-rw"] }
 
 [dev-dependencies]
 assert_cmd = "2"

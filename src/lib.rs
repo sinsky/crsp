@@ -9,6 +9,7 @@ pub mod constants;
 pub mod core;
 pub mod error;
 pub mod i18n;
+pub mod mcp;
 pub mod output;
 pub mod text;
 pub mod ui;
