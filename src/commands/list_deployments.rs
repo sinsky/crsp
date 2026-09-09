@@ -8,25 +8,13 @@
 
 use std::io::Write;
 
-use serde::Serialize;
-
 use crate::api::{ApiClient, Deployment};
+use crate::commands::shared::DeploymentJson;
 use crate::core::config::ProjectConfig;
 use crate::core::project::assert_script_configured;
 use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
-
-/// `--json` entry (clasp `{deploymentId, versionNumber, description}`).
-#[derive(Serialize)]
-struct DeploymentJson<'a> {
-    #[serde(rename = "deploymentId", skip_serializing_if = "Option::is_none")]
-    deployment_id: Option<&'a str>,
-    #[serde(rename = "versionNumber", skip_serializing_if = "Option::is_none")]
-    version_number: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'a str>,
-}
 
 pub async fn list_deployments(
     client: &ApiClient,
@@ -40,17 +28,7 @@ pub async fn list_deployments(
     };
     let deployments = client.script().list_deployments(&script_id).await?.results;
     if output.is_json() {
-        let entries: Vec<_> = deployments
-            .iter()
-            .map(|deployment| DeploymentJson {
-                deployment_id: deployment.deployment_id.as_deref(),
-                version_number: deployment.version_number(),
-                description: deployment
-                    .deployment_config
-                    .as_ref()
-                    .and_then(|config| config.description.as_deref()),
-            })
-            .collect();
+        let entries: Vec<_> = deployments.iter().map(DeploymentJson::of).collect();
         output.print_json(&entries)?;
     } else if deployments.is_empty() {
         output.message(i18n::NO_DEPLOYMENTS);

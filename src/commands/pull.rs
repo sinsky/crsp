@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{PullFile, PullResult, pull_files};
+use crate::core::files::{LocalExtensions, PullFile, PullResult, pull_files};
 use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
@@ -22,7 +22,15 @@ pub async fn pull<A: PromptAdapter>(
             "You are not in an interactive terminal and --force not used. Skipping file deletion.",
         );
     }
-    let mut result = pull_files(remote, &config.content_dir, config.allow_symlinks, 32).await?;
+    let extensions = LocalExtensions::from_config(config);
+    let mut result = pull_files(
+        remote,
+        &config.content_dir,
+        config.allow_symlinks,
+        32,
+        &extensions,
+    )
+    .await?;
     if delete_unused && (force || ui.is_interactive()) {
         let confirmed = force
             || ui.confirm(PromptConfirm {
@@ -30,8 +38,10 @@ pub async fn pull<A: PromptAdapter>(
                 default: false,
             })?;
         if confirmed {
-            let remote_names: std::collections::HashSet<_> =
-                remote.iter().map(local_name).collect();
+            let remote_names: std::collections::HashSet<_> = remote
+                .iter()
+                .map(|file| extensions.local_name(file))
+                .collect();
             let tracked = crate::core::files::collect_local_files(config).await?;
             for file in tracked.files {
                 if !remote_names.contains(&file.local_path) {
@@ -57,23 +67,6 @@ pub async fn pull<A: PromptAdapter>(
         })?;
     }
     Ok(result)
-}
-
-fn local_name(file: &PullFile) -> String {
-    if file.file_type == "JSON" && file.remote_path == "appsscript" {
-        "appsscript.json".to_string()
-    } else {
-        format!(
-            "{}{}",
-            file.remote_path,
-            match file.file_type.as_str() {
-                "SERVER_JS" => ".js",
-                "HTML" => ".html",
-                "JSON" => ".json",
-                _ => "",
-            }
-        )
-    }
 }
 
 #[cfg(unix)]

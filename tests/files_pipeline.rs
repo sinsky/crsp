@@ -6,8 +6,8 @@ use crsp::commands::show_file_status::show_file_status;
 use crsp::commands::{pull::pull as pull_command, push::push as push_command};
 use crsp::core::config::ProjectConfig;
 use crsp::core::files::{
-    LocalFile, PullFile, SkipReason, WriteFault, collect_local_files, get_changed_files, pull_file,
-    pull_file_with_fault, pull_files,
+    LocalExtensions, LocalFile, PullFile, SkipReason, WriteFault, collect_local_files,
+    get_changed_files, pull_file, pull_file_with_fault, pull_files,
 };
 use crsp::output::Output;
 use crsp::ui::{
@@ -214,9 +214,14 @@ async fn existing_target_mode_is_preserved_on_pull_overwrite() {
     let target = src.join("Code.js");
     fs::write(&target, "old").unwrap();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
-    pull_file(&src, false, &PullFile::new("Code", "SERVER_JS", "new"))
-        .await
-        .unwrap();
+    pull_file(
+        &src,
+        false,
+        &PullFile::new("Code", "SERVER_JS", "new"),
+        &LocalExtensions::clasp_defaults(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         fs::metadata(target).unwrap().permissions().mode() & 0o777,
         0o600
@@ -322,6 +327,7 @@ async fn pull_writes_directly_with_mode_0644_and_jails_remote_paths() {
         &content,
         false,
         &PullFile::new("nested/Code", "SERVER_JS", "source"),
+        &LocalExtensions::clasp_defaults(),
     )
     .await
     .unwrap();
@@ -337,6 +343,7 @@ async fn pull_writes_directly_with_mode_0644_and_jails_remote_paths() {
         &content,
         false,
         &PullFile::new("../evil", "SERVER_JS", "bad"),
+        &LocalExtensions::clasp_defaults(),
     )
     .await
     .unwrap();
@@ -358,6 +365,7 @@ async fn pull_rejects_target_symlinks() {
         &content,
         false,
         &PullFile::new("Code", "SERVER_JS", "changed"),
+        &LocalExtensions::clasp_defaults(),
     )
     .await
     .unwrap();
@@ -429,6 +437,7 @@ async fn parent_symlinks_are_skipped_without_writing_outside() {
         &src,
         false,
         &PullFile::new("nested/Code", "SERVER_JS", "bad"),
+        &LocalExtensions::clasp_defaults(),
     )
     .await
     .unwrap();
@@ -461,9 +470,59 @@ async fn concurrent_writers_share_deep_parent_safely() {
     let files = (0..64)
         .map(|index| PullFile::new(&format!("deep/shared/file{index}"), "SERVER_JS", "source"))
         .collect::<Vec<_>>();
-    let result = pull_files(&files, &src, false, 32).await.unwrap();
+    let result = pull_files(&files, &src, false, 32, &LocalExtensions::clasp_defaults())
+        .await
+        .unwrap();
     assert_eq!(result.written.len(), 64);
     assert!(src.join("deep/shared/file63.js").exists());
+}
+
+#[tokio::test]
+async fn pull_uses_configured_extensions_and_round_trips() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let mut project = config(temp.path());
+    // clasp getFileExtension resolves the FIRST configured extension.
+    project.script_extensions = vec![".gs".to_string()];
+    let files = vec![
+        PullFile::new("Code", "SERVER_JS", "code"),
+        PullFile::new("appsscript", "JSON", "{}"),
+    ];
+    let result = pull_files(
+        &files,
+        &src,
+        false,
+        32,
+        &LocalExtensions::from_config(&project),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.written,
+        vec!["Code.gs".to_string(), "appsscript.json".to_string()]
+    );
+    assert!(src.join("Code.gs").exists());
+    assert!(!src.join("Code.js").exists());
+
+    // Round-trip: the written tree is collected for push with the same
+    // configuration (no data loss on the next full-replacement PUT).
+    let collected = collect_local_files(&project).await.unwrap();
+    assert_eq!(
+        collected
+            .files
+            .iter()
+            .map(|file| file.local_path.as_str())
+            .collect::<Vec<_>>(),
+        ["appsscript.json", "Code.gs"]
+    );
+    let code = collected
+        .files
+        .iter()
+        .find(|f| f.local_path == "Code.gs")
+        .unwrap();
+    assert_eq!(code.remote_path, "Code");
+    assert_eq!(code.file_type, "SERVER_JS");
 }
 
 #[tokio::test]
@@ -581,7 +640,9 @@ async fn public_pull_result_preserves_all_skip_reasons() {
         PullFile::new("parent/child", "SERVER_JS", "x"),
         PullFile::new("link", "SERVER_JS", "x"),
     ];
-    let result = pull_files(&files, &src, false, 32).await.unwrap();
+    let result = pull_files(&files, &src, false, 32, &LocalExtensions::clasp_defaults())
+        .await
+        .unwrap();
     assert!(
         result
             .skipped
@@ -607,7 +668,8 @@ async fn public_pull_result_preserves_all_skip_reasons() {
             &src,
             false,
             &PullFile::new("race", "SERVER_JS", "x"),
-            Some(WriteFault::RaceCondition)
+            Some(WriteFault::RaceCondition),
+            &LocalExtensions::clasp_defaults(),
         ),
         Err(SkipReason::RaceCondition)
     );
@@ -616,7 +678,8 @@ async fn public_pull_result_preserves_all_skip_reasons() {
             &src,
             false,
             &PullFile::new("loop", "SERVER_JS", "x"),
-            Some(WriteFault::SymlinkLoop)
+            Some(WriteFault::SymlinkLoop),
+            &LocalExtensions::clasp_defaults(),
         ),
         Err(SkipReason::SymlinkLoop)
     );
@@ -632,9 +695,15 @@ async fn real_eloop_is_reported_as_symlink_loop() {
     fs::create_dir_all(&src).unwrap();
     symlink(src.join("x.js"), src.join("t.js")).unwrap();
     symlink(src.join("x.js"), src.join("x.js")).unwrap();
-    let result = pull_files(&[PullFile::new("t", "SERVER_JS", "source")], &src, true, 32)
-        .await
-        .unwrap();
+    let result = pull_files(
+        &[PullFile::new("t", "SERVER_JS", "source")],
+        &src,
+        true,
+        32,
+        &LocalExtensions::clasp_defaults(),
+    )
+    .await
+    .unwrap();
     assert!(
         result
             .skipped

@@ -285,12 +285,79 @@ pub fn get_changed_files(local: &[LocalFile], remote: &[PullFile]) -> Vec<LocalF
         .collect()
 }
 
+/// The local naming view of the project extension settings (clasp
+/// `getFileExtension`, files.ts:186-211): the FIRST configured extension per
+/// type, falling back to clasp's defaults (`.js`/`.html`/`.json`) when the
+/// list is empty. Single source of truth for remote→local naming in the pull
+/// pipeline, clone/create initial pulls, and the `--deleteUnusedFiles`
+/// matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalExtensions {
+    script: String,
+    html: String,
+    json: String,
+}
+
+impl LocalExtensions {
+    /// Reads the first entry of the project's fixed-up extension lists.
+    pub fn from_config(config: &ProjectConfig) -> Self {
+        Self {
+            script: config
+                .script_extensions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| ".js".to_string()),
+            html: config
+                .html_extensions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| ".html".to_string()),
+            json: config
+                .json_extensions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| ".json".to_string()),
+        }
+    }
+
+    /// clasp `readFileExtensions({})` defaults.
+    pub fn clasp_defaults() -> Self {
+        Self {
+            script: ".js".to_string(),
+            html: ".html".to_string(),
+            json: ".json".to_string(),
+        }
+    }
+
+    /// clasp `getFileExtension`: SERVER_JS/HTML/JSON map to their first
+    /// configured extension; unknown types carry no extension.
+    pub fn extension_for_type(&self, file_type: &str) -> &str {
+        match file_type {
+            "SERVER_JS" => &self.script,
+            "HTML" => &self.html,
+            "JSON" => &self.json,
+            _ => "",
+        }
+    }
+
+    /// The local file name for a remote file (clasp `fetchRemote`:
+    /// `{remotePath}{extension}`; the manifest's remote name is `appsscript`).
+    pub fn local_name(&self, file: &PullFile) -> String {
+        format!(
+            "{}{}",
+            file.remote_path,
+            self.extension_for_type(&file.file_type)
+        )
+    }
+}
+
 pub async fn pull_file(
     content_dir: &Path,
     allow_symlinks: bool,
     file: &PullFile,
+    extensions: &LocalExtensions,
 ) -> Result<Option<String>, CrspError> {
-    match pull_file_with_fault(content_dir, allow_symlinks, file, None) {
+    match pull_file_with_fault(content_dir, allow_symlinks, file, None, extensions) {
         Ok(value) => Ok(value),
         Err(_) => Ok(None),
     }
@@ -301,13 +368,9 @@ pub fn pull_file_with_fault(
     allow_symlinks: bool,
     file: &PullFile,
     fault: Option<WriteFault>,
+    extensions: &LocalExtensions,
 ) -> Result<Option<String>, SkipReason> {
-    let extension = extension_for_type(&file.file_type);
-    let name = if file.file_type == "JSON" && file.remote_path == "appsscript" {
-        "appsscript.json".to_string()
-    } else {
-        format!("{}{}", file.remote_path, extension)
-    };
+    let name = extensions.local_name(file);
     let Some(target) = PathJail::remote_target_path(content_dir, &name) else {
         return Err(SkipReason::OutsideContentDir);
     };
@@ -347,15 +410,6 @@ pub fn pull_file_with_fault(
         )
         .into_owned(),
     ))
-}
-
-fn extension_for_type(file_type: &str) -> &'static str {
-    match file_type {
-        "SERVER_JS" => ".js",
-        "HTML" => ".html",
-        "JSON" => ".json",
-        _ => "",
-    }
 }
 
 fn write_remote_file(
@@ -459,18 +513,20 @@ pub async fn pull_files(
     content_dir: &Path,
     allow_symlinks: bool,
     max_writes: usize,
+    extensions: &LocalExtensions,
 ) -> Result<PullResult, CrspError> {
     let semaphore = std::sync::Arc::new(Semaphore::new(max_writes.clamp(1, 32)));
     let results = stream::iter(files.iter().cloned().enumerate().map(|(index, file)| {
         let semaphore = std::sync::Arc::clone(&semaphore);
         let content_dir = content_dir.to_path_buf();
+        let extensions = extensions.clone();
         async move {
             let _permit = semaphore
                 .acquire_owned()
                 .await
                 .map_err(|_| CrspError::Validation("write semaphore closed".to_string()))?;
             let outcome = tokio::task::spawn_blocking(move || {
-                match pull_file_with_fault(&content_dir, allow_symlinks, &file, None) {
+                match pull_file_with_fault(&content_dir, allow_symlinks, &file, None, &extensions) {
                     Ok(Some(path)) => (Some(path), None),
                     Ok(None) => (None, None),
                     Err(reason) => (

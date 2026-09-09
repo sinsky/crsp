@@ -3,7 +3,9 @@ use std::path::Path;
 use crate::api::drive::DriveFile;
 use crate::api::{ApiClient, Deployment, PagedResults};
 use crate::core::config::ProjectConfig;
-use crate::core::files::{CollectLocalFilesResult, LocalFile, PullFile, collect_local_files};
+use crate::core::files::{
+    CollectLocalFilesResult, LocalExtensions, LocalFile, PullFile, collect_local_files,
+};
 use crate::core::path::{PathJail, normalize_slashes, relative_path};
 use crate::error::CrspError;
 use crate::i18n;
@@ -166,24 +168,14 @@ pub struct RemoteFile {
     pub local_path: String,
 }
 
-/// The fixed-up extension mapping shared with the write pipeline
-/// ([`crate::core::files`]; clasp defaults).
-fn extension_for_type(file_type: &str) -> &'static str {
-    match file_type {
-        "SERVER_JS" => ".js",
-        "HTML" => ".html",
-        "JSON" => ".json",
-        _ => "",
-    }
-}
-
 /// clasp `fetchRemote` (files.ts:264-327): GETs the project content and maps
 /// every remote file to its local display path, rejecting names that would
-/// escape the content directory before any write happens.
+/// escape the content directory before any write happens. Naming uses the
+/// project's configured extensions ([`LocalExtensions`]).
 pub async fn fetch_remote_files(
     client: &ApiClient,
     script_id: &str,
-    content_dir: &Path,
+    config: &ProjectConfig,
     cwd: &Path,
     version_number: Option<i32>,
 ) -> Result<Vec<RemoteFile>, CrspError> {
@@ -191,6 +183,7 @@ pub async fn fetch_remote_files(
         .script()
         .get_content(script_id, version_number)
         .await?;
+    let extensions = LocalExtensions::from_config(config);
     content
         .files()
         .iter()
@@ -198,9 +191,9 @@ pub async fn fetch_remote_files(
             let file_type = file.file_type.clone().unwrap_or_default();
             let name = file.name.clone().unwrap_or_default();
             let remote = PullFile::new(&name, &file_type, file.source.as_deref().unwrap_or(""));
-            let local_name = format!("{name}{}", extension_for_type(&file_type));
-            let resolved = PathJail::resolve_lexical(content_dir, &local_name);
-            if !PathJail::is_inside(content_dir, &resolved) {
+            let local_name = extensions.local_name(&remote);
+            let resolved = PathJail::resolve_lexical(&config.content_dir, &local_name);
+            if !PathJail::is_inside(&config.content_dir, &resolved) {
                 return Err(CrspError::Validation(
                     i18n::remote_file_attempts_outside_write(&name),
                 ));

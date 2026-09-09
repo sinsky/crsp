@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::api::ApiClient;
 use crate::api::Deployment;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{PullFile, SkipReason, pull_files};
+use crate::core::files::{LocalExtensions, PullFile, SkipReason, pull_files};
 use crate::core::project::{PULL_WRITE_LIMIT, fetch_remote_files};
 use crate::error::CrspError;
 use crate::output::Output;
@@ -125,8 +125,7 @@ pub async fn pull_initial_files(
     cwd: &Path,
     version_number: Option<i32>,
 ) -> Result<InitialPull, CrspError> {
-    let remote =
-        fetch_remote_files(client, script_id, &config.content_dir, cwd, version_number).await?;
+    let remote = fetch_remote_files(client, script_id, config, cwd, version_number).await?;
     let pull_inputs: Vec<PullFile> = remote
         .iter()
         .filter(|file| !file.file.source.is_empty())
@@ -137,6 +136,7 @@ pub async fn pull_initial_files(
         &config.content_dir,
         config.allow_symlinks,
         PULL_WRITE_LIMIT,
+        &LocalExtensions::from_config(config),
     )
     .await?;
     let files: Vec<String> = remote.iter().map(|file| file.local_path.clone()).collect();
@@ -155,17 +155,30 @@ pub async fn pull_initial_files(
     Ok(InitialPull { files, skipped })
 }
 
-/// `--json` deployment payload (clasp create-deployment.ts:51-55,
-/// update-deployment.ts:58-62; undefined keys are omitted by
-/// `JSON.stringify`).
+/// `--json` deployment entry (clasp create-deployment.ts:51-55,
+/// update-deployment.ts:58-62, list-deployments.ts:40-44; undefined keys are
+/// omitted by `JSON.stringify`).
 #[derive(Serialize)]
-struct DeploymentJson<'a> {
+pub(crate) struct DeploymentJson<'a> {
     #[serde(rename = "deploymentId", skip_serializing_if = "Option::is_none")]
     deployment_id: Option<&'a str>,
     #[serde(rename = "versionNumber", skip_serializing_if = "Option::is_none")]
     version_number: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
+}
+
+impl<'a> DeploymentJson<'a> {
+    pub(crate) fn of(deployment: &'a Deployment) -> Self {
+        Self {
+            deployment_id: deployment.deployment_id.as_deref(),
+            version_number: deployment.version_number(),
+            description: deployment
+                .deployment_config
+                .as_ref()
+                .and_then(|config| config.description.as_deref()),
+        }
+    }
 }
 
 /// Prints a create/update deployment result (clasp create-deployment.ts /
@@ -178,14 +191,7 @@ pub fn print_deployment_result(
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<(), CrspError> {
     if output.is_json() {
-        output.print_json(&DeploymentJson {
-            deployment_id: deployment.deployment_id.as_deref(),
-            version_number: deployment.version_number(),
-            description: deployment
-                .deployment_config
-                .as_ref()
-                .and_then(|config| config.description.as_deref()),
-        })?;
+        output.print_json(&DeploymentJson::of(deployment))?;
     } else {
         let message = if redeploy {
             crate::i18n::redeployed(

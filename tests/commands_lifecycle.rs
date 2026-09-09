@@ -486,6 +486,86 @@ async fn clone_warns_on_skipped_write() {
     );
 }
 
+#[tokio::test]
+async fn clone_honors_configured_script_extensions() {
+    let server = MockServer::start().await;
+    mount_content(&server).await;
+    let temp = TempDir::new().unwrap();
+    let client = api_client(&server.uri());
+    let mut config = default_config(temp.path()).await;
+    // clasp getFileExtension uses the FIRST configured script extension.
+    config.script_extensions = vec![".gs".to_string()];
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    clone_script(
+        &client,
+        &config,
+        CloneArgs {
+            script_id: Some("script"),
+            version_number: None,
+            root_dir: None,
+            cwd: temp.path(),
+        },
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "└─ Code.gs\n└─ appsscript.json\nCloned 2 files.\n"
+    );
+    assert!(temp.path().join("Code.gs").exists());
+    assert!(!temp.path().join("Code.js").exists());
+
+    // Round-trip: a push on the cloned tree collects the written file.
+    config.script_id = Some("script".to_string());
+    let collected = crsp::core::files::collect_local_files(&config)
+        .await
+        .unwrap();
+    let code = collected
+        .files
+        .iter()
+        .find(|file| file.local_path == "Code.gs")
+        .unwrap();
+    assert_eq!(code.file_type, "SERVER_JS");
+    assert_eq!(code.remote_path, "Code");
+}
+
+#[tokio::test]
+async fn clone_maps_invalid_argument_to_invalid_script_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(
+            json!({"error": {"code": 400, "message": "Requested entity was not found."}}),
+        ))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let client = api_client(&server.uri());
+    let config = default_config(temp.path()).await;
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    let error = clone_script(
+        &client,
+        &config,
+        CloneArgs {
+            script_id: Some("script"),
+            version_number: None,
+            root_dir: None,
+            cwd: temp.path(),
+        },
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "Invalid script ID.");
+    // The failure happens before any pull or settings write.
+    assert!(!temp.path().join(".clasp.json").exists());
+}
+
 // ---------------------------------------------------------------------------
 // create-script
 // ---------------------------------------------------------------------------
