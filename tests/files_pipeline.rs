@@ -1,11 +1,69 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crsp::api::{ApiClient, ApiClientConfig, BaseUrls};
+use crsp::commands::show_file_status::show_file_status;
+use crsp::commands::{pull::pull as pull_command, push::push as push_command};
 use crsp::core::config::ProjectConfig;
 use crsp::core::files::{
-    LocalFile, PullFile, SkipReason, collect_local_files, get_changed_files, pull_file,
+    LocalFile, PullFile, SkipReason, WriteFault, collect_local_files, get_changed_files, pull_file,
+    pull_file_with_fault, pull_files,
+};
+use crsp::output::Output;
+use crsp::ui::{
+    PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect,
+    PromptSpinner, Ui,
 };
 use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn api_client(base: &str) -> ApiClient {
+    let refresh: crsp::api::RefreshFn =
+        std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
+    ApiClient::with_base_urls(
+        ApiClientConfig::new("token", refresh),
+        BaseUrls {
+            script: base.to_string(),
+            drive: base.to_string(),
+            service_usage: base.to_string(),
+            discovery: base.to_string(),
+            logging: base.to_string(),
+            oauth2: base.to_string(),
+            userinfo: base.to_string(),
+        },
+    )
+    .unwrap()
+}
+
+#[derive(Default)]
+struct TestPrompt {
+    interactive: bool,
+    answer: bool,
+}
+impl PromptAdapter for TestPrompt {
+    fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+    fn input(&self, _: &PromptInput) -> std::io::Result<String> {
+        Ok(String::new())
+    }
+    fn select(&self, _: &PromptSelect) -> std::io::Result<String> {
+        Ok(String::new())
+    }
+    fn multi_select(&self, _: &PromptMultiSelect) -> std::io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    fn confirm(&self, _: &PromptConfirm) -> std::io::Result<bool> {
+        Ok(self.answer)
+    }
+    fn dialog(&self, _: &PromptDialog) -> std::io::Result<String> {
+        Ok(String::new())
+    }
+    fn spinner<T, F: FnOnce() -> T>(&self, _: PromptSpinner, f: F) -> std::io::Result<T> {
+        Ok(f())
+    }
+}
 
 fn config(root: &Path) -> ProjectConfig {
     ProjectConfig {
@@ -23,6 +81,127 @@ fn config(root: &Path) -> ProjectConfig {
         allow_symlinks: false,
         ignore_file_path: None,
     }
+}
+
+#[tokio::test]
+async fn push_zero_changed_issues_no_put_and_prints_up_to_date() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"files":[{"name":"Code","type":"SERVER_JS","source":"same"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let put = Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200));
+    put.mount(&server).await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Code.js"), "same").unwrap();
+    let client = api_client(&server.uri());
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    let result = push_command(
+        &client,
+        &config(temp.path()),
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert!(result.up_to_date);
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Script is already up to date.\n"
+    );
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn push_changed_puts_all_files_with_normalized_names_and_manifest_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/v1/projects/script/content")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[{"name":"nested/Keep","type":"SERVER_JS","source":"same"}]}))).mount(&server).await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(src.join("nested")).unwrap();
+    fs::write(src.join("nested/Keep.js"), "same").unwrap();
+    fs::write(src.join("nested/Changed.gs"), "changed").unwrap();
+    fs::write(src.join("appsscript.json"), "{\"timeZone\":\"UTC\"}").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    push_command(
+        &api_client(&server.uri()),
+        &config(temp.path()),
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let put = requests
+        .iter()
+        .find(|request| request.method == "PUT")
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&put.body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"files":[{"name":"appsscript","type":"JSON","source":"{\"timeZone\":\"UTC\"}"},{"name":"nested/Changed","type":"SERVER_JS","source":"changed"},{"name":"nested/Keep","type":"SERVER_JS","source":"same"}]})
+    );
+}
+
+#[tokio::test]
+async fn syntax_error_api_response_is_extracted_with_snippet() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(
+            serde_json::json!({"error":{"message":"Syntax error: Missing ; line: 2 file: Code"}}),
+        ))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Code.js"), "one\ntwo\nthree").unwrap();
+    let result = crsp::core::files::push_files(&api_client(&server.uri()), &config(temp.path()))
+        .await
+        .unwrap_err();
+    let message = result.to_string();
+    let files = collect_local_files(&config(temp.path()))
+        .await
+        .unwrap()
+        .files;
+    let snippet = crsp::core::files::syntax_error_snippet(&message, &files).unwrap();
+    assert!(snippet.contains("Missing ;"));
+    assert!(snippet.contains("=> two"));
 }
 
 #[tokio::test]
@@ -236,6 +415,231 @@ fn syntax_error_extraction_includes_source_line() {
     .unwrap();
     assert!(snippet.contains("Missing ; - \"Code:2\""));
     assert!(snippet.contains("=> two"));
+}
+
+#[tokio::test]
+async fn pull_deletion_force_and_confirm_paths_report_deleted_files() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("old.js"), "old").unwrap();
+    let remote = vec![PullFile::new("new", "SERVER_JS", "new")];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    let ui = Ui::new(TestPrompt {
+        interactive: true,
+        answer: true,
+    });
+    let result = pull_command(
+        &api_client("http://127.0.0.1:1"),
+        &config(temp.path()),
+        &remote,
+        true,
+        false,
+        &ui,
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert!(result.deleted.contains(&"old.js".to_string()));
+    assert!(!src.join("old.js").exists());
+    assert!(String::from_utf8(out).unwrap().contains("deleted"));
+}
+
+#[tokio::test]
+async fn pull_noninteractive_deletion_warns_and_preserves_files() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("old.js"), "old").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    let result = pull_command(
+        &api_client("http://127.0.0.1:1"),
+        &config(temp.path()),
+        &[],
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert!(result.deleted.is_empty());
+    assert!(src.join("old.js").exists());
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "You are not in an interactive terminal and --force not used. Skipping file deletion.\n"
+    );
+}
+
+#[tokio::test]
+async fn noninteractive_manifest_change_is_rejected_before_put() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/v1/projects/script/content")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":[{"name":"appsscript","type":"JSON","source":"{\"old\":true}"}]}))).mount(&server).await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("appsscript.json"), "{\"new\":true}").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    let result = push_command(
+        &api_client(&server.uri()),
+        &config(temp.path()),
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "Skipping push.\n");
+    assert!(!result.up_to_date);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn public_pull_result_preserves_all_skip_reasons() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, src.join("parent")).unwrap();
+    fs::write(src.join("target.js"), "before").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(src.join("target.js"), src.join("link.js")).unwrap();
+    let files = vec![
+        PullFile::new("../evil", "SERVER_JS", "x"),
+        PullFile::new("parent/child", "SERVER_JS", "x"),
+        PullFile::new("link", "SERVER_JS", "x"),
+    ];
+    let result = pull_files(&files, &src, false, 32).await.unwrap();
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|item| item.reason == SkipReason::OutsideContentDir)
+    );
+    #[cfg(unix)]
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|item| item.reason == SkipReason::ParentSymlink)
+    );
+    #[cfg(unix)]
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|item| item.reason == SkipReason::TargetSymlink)
+    );
+    assert_eq!(
+        pull_file_with_fault(
+            &src,
+            false,
+            &PullFile::new("race", "SERVER_JS", "x"),
+            Some(WriteFault::RaceCondition)
+        ),
+        Err(SkipReason::RaceCondition)
+    );
+    assert_eq!(
+        pull_file_with_fault(
+            &src,
+            false,
+            &PullFile::new("loop", "SERVER_JS", "x"),
+            Some(WriteFault::SymlinkLoop)
+        ),
+        Err(SkipReason::SymlinkLoop)
+    );
+    assert_eq!(fs::read_to_string(src.join("target.js")).unwrap(), "before");
+}
+
+#[tokio::test]
+async fn fixture_tree_matches_expected_snapshot() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/files/source");
+    let expected = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/files/expected.txt"),
+    )
+    .unwrap();
+    let mut configured = config(fixture.parent().unwrap());
+    configured.content_dir = fixture;
+    let result = collect_local_files(&configured).await.unwrap();
+    let actual = result
+        .files
+        .iter()
+        .map(|file| file.local_path.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn status_compresses_untracked_files_to_common_parent() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(src.join("node_modules/lib")).unwrap();
+    fs::write(src.join("tracked.js"), "tracked").unwrap();
+    fs::write(src.join("node_modules/lib/a.txt"), "a").unwrap();
+    fs::write(src.join("node_modules/lib/b.txt"), "b").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    show_file_status(&config(temp.path()), &mut output)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert!(
+        json["untrackedFiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "node_modules/")
+    );
+}
+
+#[tokio::test]
+async fn allow_symlinks_follows_directory_links() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("linked.js"), "linked").unwrap();
+        symlink(&outside, src.join("linked")).unwrap();
+        let mut configured = config(temp.path());
+        configured.allow_symlinks = true;
+        let result = collect_local_files(&configured).await.unwrap();
+        assert!(
+            result
+                .files
+                .iter()
+                .any(|file| file.local_path == "linked/linked.js")
+        );
+    }
 }
 
 #[test]

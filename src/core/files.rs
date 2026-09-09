@@ -74,9 +74,17 @@ pub struct CollectLocalFilesResult {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PullResult {
+    #[serde(rename = "pulledFiles")]
     pub written: Vec<String>,
     pub skipped: Vec<SkippedFile>,
+    #[serde(rename = "deletedFiles")]
     pub deleted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteFault {
+    RaceCondition,
+    SymlinkLoop,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -261,6 +269,18 @@ pub async fn pull_file(
     allow_symlinks: bool,
     file: &PullFile,
 ) -> Result<Option<String>, CrspError> {
+    match pull_file_with_fault(content_dir, allow_symlinks, file, None) {
+        Ok(value) => Ok(value),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn pull_file_with_fault(
+    content_dir: &Path,
+    allow_symlinks: bool,
+    file: &PullFile,
+    fault: Option<WriteFault>,
+) -> Result<Option<String>, SkipReason> {
     let extension = extension_for_type(&file.file_type);
     let name = if file.file_type == "JSON" && file.remote_path == "appsscript" {
         "appsscript.json".to_string()
@@ -268,10 +288,25 @@ pub async fn pull_file(
         format!("{}{}", file.remote_path, extension)
     };
     let Some(target) = PathJail::remote_target_path(content_dir, &name) else {
-        return Ok(None);
+        return Err(SkipReason::OutsideContentDir);
     };
-    if !write_remote_file(content_dir, &target, allow_symlinks, &file.source)? {
-        return Ok(None);
+    if let Some(fault) = fault {
+        return Err(match fault {
+            WriteFault::RaceCondition => SkipReason::RaceCondition,
+            WriteFault::SymlinkLoop => SkipReason::SymlinkLoop,
+        });
+    }
+    if !allow_symlinks
+        && fs::symlink_metadata(&target)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+    {
+        return Err(SkipReason::TargetSymlink);
+    }
+    if !write_remote_file(content_dir, &target, allow_symlinks, &file.source)
+        .map_err(|_| SkipReason::RaceCondition)?
+    {
+        return Err(SkipReason::ParentSymlink);
     }
     Ok(Some(
         normalize_slashes(
@@ -380,14 +415,19 @@ pub async fn pull_files(
             .acquire()
             .await
             .map_err(|_| CrspError::Validation("write semaphore closed".to_string()))?;
-        if let Some(path) = pull_file(content_dir, allow_symlinks, file).await? {
-            result.written.push(path);
+        match pull_file_with_fault(content_dir, allow_symlinks, file, None) {
+            Ok(Some(path)) => result.written.push(path),
+            Ok(None) => {}
+            Err(reason) => result.skipped.push(SkippedFile {
+                local_path: file.remote_path.clone(),
+                reason,
+            }),
         }
     }
     Ok(result)
 }
 
-pub async fn push_files(
+pub async fn prepare_push(
     client: &ApiClient,
     config: &ProjectConfig,
 ) -> Result<PushResult, CrspError> {
@@ -403,15 +443,27 @@ pub async fn push_files(
         .filter_map(script_file_to_pull)
         .collect::<Vec<_>>();
     let changed = get_changed_files(&collected.files, &remote);
-    if changed.is_empty() {
-        return Ok(PushResult {
-            files: collected.files,
-            changed,
-            skipped: collected.skipped,
-            up_to_date: true,
-        });
+    Ok(PushResult {
+        files: collected.files,
+        changed: changed.clone(),
+        skipped: collected.skipped,
+        up_to_date: changed.is_empty(),
+    })
+}
+
+pub async fn put_push_files(
+    client: &ApiClient,
+    config: &ProjectConfig,
+    result: &PushResult,
+) -> Result<(), CrspError> {
+    if result.up_to_date {
+        return Ok(());
     }
-    let body = collected
+    let script_id = config
+        .script_id
+        .as_deref()
+        .ok_or_else(|| CrspError::Config(i18n::PROJECT_SETTINGS_NOT_FOUND.to_string()))?;
+    let body = result
         .files
         .iter()
         .map(|file| PushFile {
@@ -420,13 +472,26 @@ pub async fn push_files(
             source: file.source.clone(),
         })
         .collect::<Vec<_>>();
-    client.script().update_content(script_id, &body).await?;
-    Ok(PushResult {
-        files: collected.files,
-        changed,
-        skipped: collected.skipped,
-        up_to_date: false,
-    })
+    match client.script().update_content(script_id, &body).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let CrspError::Api { message, .. } = &error
+                && let Some(snippet) = syntax_error_snippet(message, &result.files)
+            {
+                return Err(CrspError::Validation(format!("{message}\n{snippet}")));
+            }
+            Err(error)
+        }
+    }
+}
+
+pub async fn push_files(
+    client: &ApiClient,
+    config: &ProjectConfig,
+) -> Result<PushResult, CrspError> {
+    let result = prepare_push(client, config).await?;
+    put_push_files(client, config, &result).await?;
+    Ok(result)
 }
 
 fn script_file_to_pull(file: &ScriptFile) -> Option<PullFile> {

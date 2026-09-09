@@ -8,9 +8,9 @@ use crate::output::Output;
 #[derive(Debug, Serialize)]
 pub struct StatusPayload {
     #[serde(rename = "filesToPush")]
-    files_to_push: Vec<String>,
+    pub files_to_push: Vec<String>,
     #[serde(rename = "untrackedFiles")]
-    untracked_files: Vec<String>,
+    pub untracked_files: Vec<String>,
 }
 
 pub async fn show_file_status<W: std::io::Write, E: std::io::Write>(
@@ -51,12 +51,11 @@ async fn collect_untracked(
         .iter()
         .map(|file| file.local_path.as_str())
         .collect();
-    let matcher = config.ignore_matcher().await?;
     let mut all = Vec::new();
     collect_paths(&config.content_dir, &config.content_dir, &mut all)?;
     let mut untracked = std::collections::BTreeSet::new();
     for path in all {
-        if tracked.contains(path.as_str()) || !matcher.is_tracked(&path) {
+        if tracked.contains(path.as_str()) {
             continue;
         }
         let components: Vec<_> = path.split('/').collect();

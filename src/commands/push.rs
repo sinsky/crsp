@@ -3,20 +3,20 @@ use std::time::Duration;
 
 use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{PushResult, push_files};
+use crate::core::files::{PushResult, prepare_push, put_push_files};
 use crate::error::CrspError;
 use crate::output::Output;
-use crate::ui::{PromptConfirm, Ui};
+use crate::ui::{PromptAdapter, PromptConfirm, Ui};
 
-pub async fn push(
+pub async fn push<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
     force: bool,
     watch: bool,
-    ui: &Ui,
+    ui: &Ui<A>,
     output: &mut Output<impl std::io::Write, impl std::io::Write>,
 ) -> Result<PushResult, CrspError> {
-    let result = push_files(client, config).await?;
+    let result = prepare_push(client, config).await?;
     if !force
         && result
             .changed
@@ -33,6 +33,7 @@ pub async fn push(
             return Ok(result);
         }
     }
+    put_push_files(client, config, &result).await?;
     if result.up_to_date {
         output.message("Script is already up to date.");
     } else if output.is_json() {
