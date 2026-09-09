@@ -4,7 +4,9 @@
 //! validation, and generic pagination.
 
 pub mod config;
+pub mod files;
 pub mod ignore;
 pub mod manifest;
 pub mod pagination;
 pub mod path;
+pub mod project;
