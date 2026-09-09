@@ -204,6 +204,42 @@ async fn syntax_error_api_response_is_extracted_with_snippet() {
     assert!(snippet.contains("=> two"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn existing_target_mode_is_preserved_on_pull_overwrite() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let target = src.join("Code.js");
+    fs::write(&target, "old").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    pull_file(&src, false, &PullFile::new("Code", "SERVER_JS", "new"))
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::metadata(target).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn locale_sort_vector_matches_ruling() {
+    let mut files = vec![
+        LocalFile::new("Code.gs", "Code", "SERVER_JS", ""),
+        LocalFile::new("appsscript.json", "appsscript", "JSON", ""),
+        LocalFile::new("Bar.gs", "Bar", "SERVER_JS", ""),
+    ];
+    crsp::core::files::sort_for_test(&mut files, &[]);
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.local_path.as_str())
+            .collect::<Vec<_>>(),
+        ["appsscript.json", "Bar.gs", "Code.gs"]
+    );
+}
+
 #[tokio::test]
 async fn default_ignore_tracks_ts_then_marks_it_unsupported() {
     let temp = TempDir::new().unwrap();
@@ -215,7 +251,7 @@ async fn default_ignore_tracks_ts_then_marks_it_unsupported() {
 
     let result = collect_local_files(&config(temp.path())).await.unwrap();
     assert_eq!(result.files.len(), 2);
-    assert_eq!(result.files[0].remote_path, "Code");
+    assert_eq!(result.files[0].remote_path, "appsscript");
     assert!(result
         .skipped
         .iter()
@@ -415,6 +451,19 @@ fn syntax_error_extraction_includes_source_line() {
     .unwrap();
     assert!(snippet.contains("Missing ; - \"Code:2\""));
     assert!(snippet.contains("=> two"));
+}
+
+#[tokio::test]
+async fn concurrent_writers_share_deep_parent_safely() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let files = (0..64)
+        .map(|index| PullFile::new(&format!("deep/shared/file{index}"), "SERVER_JS", "source"))
+        .collect::<Vec<_>>();
+    let result = pull_files(&files, &src, false, 32).await.unwrap();
+    assert_eq!(result.written.len(), 64);
+    assert!(src.join("deep/shared/file63.js").exists());
 }
 
 #[tokio::test]

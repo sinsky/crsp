@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
@@ -238,16 +239,36 @@ fn collect_entries(
     Ok(())
 }
 
+pub fn sort_for_test(files: &mut [LocalFile], order: &[String]) {
+    sort_push_order(files, order);
+}
+
+fn locale_key(value: &str) -> (String, String, String) {
+    let folded = value.to_lowercase();
+    let case_tie = value
+        .chars()
+        .map(|ch| if ch.is_lowercase() { '0' } else { '1' })
+        .collect();
+    (folded, case_tie, value.to_string())
+}
+
 fn sort_push_order(files: &mut [LocalFile], order: &[String]) {
-    files.sort_by_key(|file| {
-        let index = order
+    files.sort_by(|left, right| {
+        let left_index = order
             .iter()
-            .position(|item| normalize_slashes(item) == file.local_path);
-        (
-            index.is_none(),
-            index.unwrap_or(usize::MAX),
-            file.local_path.clone(),
-        )
+            .position(|item| normalize_slashes(item) == left.local_path);
+        let right_index = order
+            .iter()
+            .position(|item| normalize_slashes(item) == right.local_path);
+        left_index
+            .is_none()
+            .cmp(&right_index.is_none())
+            .then_with(|| {
+                left_index
+                    .unwrap_or(usize::MAX)
+                    .cmp(&right_index.unwrap_or(usize::MAX))
+            })
+            .then_with(|| locale_key(&left.local_path).cmp(&locale_key(&right.local_path)))
     });
 }
 
@@ -303,6 +324,18 @@ pub fn pull_file_with_fault(
     {
         return Err(SkipReason::TargetSymlink);
     }
+    if !allow_symlinks {
+        let mut current = target.parent().unwrap_or(content_dir);
+        while current != content_dir && PathJail::is_inside(content_dir, current) {
+            if fs::symlink_metadata(current)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(SkipReason::ParentSymlink);
+            }
+            current = current.parent().unwrap_or(content_dir);
+        }
+    }
     if !write_remote_file(content_dir, &target, allow_symlinks, &file.source)
         .map_err(|_| SkipReason::RaceCondition)?
     {
@@ -334,43 +367,66 @@ fn write_remote_file(
     target: &Path,
     allow_symlinks: bool,
     source: &str,
-) -> Result<bool, CrspError> {
+) -> Result<bool, SkipReason> {
     if !allow_symlinks
         && fs::symlink_metadata(content_dir)
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
     {
-        return Ok(false);
+        return Err(SkipReason::ParentSymlink);
     }
-    fs::create_dir_all(content_dir)?;
-    let real_content = fs::canonicalize(content_dir).unwrap_or_else(|_| content_dir.to_path_buf());
+    fs::create_dir_all(content_dir).map_err(|_| SkipReason::RaceCondition)?;
+    let real_content = fs::canonicalize(content_dir).map_err(|_| SkipReason::OutsideContentDir)?;
     let parent = target.parent().unwrap_or(content_dir);
-    if !verify_or_create_parent(parent, &real_content, allow_symlinks)? {
-        return Ok(false);
-    }
-    if !allow_symlinks
-        && fs::symlink_metadata(target)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
+    if !verify_or_create_parent(parent, &real_content, allow_symlinks)
+        .map_err(|_| SkipReason::ParentSymlink)?
     {
-        return Ok(false);
+        return Err(SkipReason::ParentSymlink);
     }
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o644);
         if !allow_symlinks {
             options.custom_flags(libc::O_NOFOLLOW);
         }
+        options.mode(0o644);
     }
     let mut file = match options.open(target) {
         Ok(file) => file,
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(false),
-        Err(error) => return Err(error.into()),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            return Err(SkipReason::SymlinkLoop);
+        }
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+            return Err(SkipReason::RaceCondition);
+        }
+        Err(_) => return Err(SkipReason::RaceCondition),
     };
-    file.write_all(source.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let fd_metadata = file.metadata().map_err(|_| SkipReason::RaceCondition)?;
+        let path_metadata = fs::metadata(target).map_err(|_| SkipReason::RaceCondition)?;
+        if fd_metadata.dev() != path_metadata.dev() || fd_metadata.ino() != path_metadata.ino() {
+            return Err(SkipReason::RaceCondition);
+        }
+        let real_target = fs::canonicalize(target).map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                SkipReason::SymlinkLoop
+            } else {
+                SkipReason::ParentSymlink
+            }
+        })?;
+        if !allow_symlinks && !PathJail::is_inside(&real_content, &real_target) {
+            return Err(SkipReason::ParentSymlink);
+        }
+    }
+    file.set_len(0).map_err(|_| SkipReason::RaceCondition)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| SkipReason::RaceCondition)?;
+    file.write_all(source.as_bytes())
+        .map_err(|_| SkipReason::RaceCondition)?;
     Ok(true)
 }
 
@@ -408,20 +464,45 @@ pub async fn pull_files(
     allow_symlinks: bool,
     max_writes: usize,
 ) -> Result<PullResult, CrspError> {
-    let semaphore = Semaphore::new(max_writes.max(1));
-    let mut result = PullResult::default();
-    for file in files {
-        let _permit = semaphore
-            .acquire()
+    let semaphore = std::sync::Arc::new(Semaphore::new(max_writes.clamp(1, 32)));
+    let results = stream::iter(files.iter().cloned().enumerate().map(|(index, file)| {
+        let semaphore = std::sync::Arc::clone(&semaphore);
+        let content_dir = content_dir.to_path_buf();
+        async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| CrspError::Validation("write semaphore closed".to_string()))?;
+            let outcome = tokio::task::spawn_blocking(move || {
+                match pull_file_with_fault(&content_dir, allow_symlinks, &file, None) {
+                    Ok(Some(path)) => (Some(path), None),
+                    Ok(None) => (None, None),
+                    Err(reason) => (
+                        None,
+                        Some(SkippedFile {
+                            local_path: file.remote_path,
+                            reason,
+                        }),
+                    ),
+                }
+            })
             .await
-            .map_err(|_| CrspError::Validation("write semaphore closed".to_string()))?;
-        match pull_file_with_fault(content_dir, allow_symlinks, file, None) {
-            Ok(Some(path)) => result.written.push(path),
-            Ok(None) => {}
-            Err(reason) => result.skipped.push(SkippedFile {
-                local_path: file.remote_path.clone(),
-                reason,
-            }),
+            .map_err(|error| CrspError::Validation(error.to_string()))?;
+            Ok::<_, CrspError>((index, outcome))
+        }
+    }))
+    .buffer_unordered(32)
+    .try_collect::<Vec<_>>()
+    .await?;
+    let mut result = PullResult::default();
+    let mut results = results;
+    results.sort_by_key(|(index, _)| *index);
+    for (_, (written, skipped)) in results {
+        if let Some(path) = written {
+            result.written.push(path);
+        }
+        if let Some(skipped) = skipped {
+            result.skipped.push(skipped);
         }
     }
     Ok(result)
