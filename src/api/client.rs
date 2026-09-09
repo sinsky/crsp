@@ -15,10 +15,12 @@
 //!   retry, and a 401 after a refresh is a normal `NotAuthenticated` API
 //!   error (no second refresh).
 //!
-//! Backoff (spec §7.1): the first retry waits 100ms; each subsequent retry
-//! waits `100 + ((2^n − 1) / 2) × 1000ms` where `n` is the number of retries
-//! already performed. The sleeper is injectable so tests assert delay
-//! sequences without real waiting.
+//! Backoff (spec §7.1, gaxios 7.3.1 `getNextRetryDelay`): the first retry
+//! waits 100ms; each subsequent retry waits `((2^n − 1) / 2) × 1000ms` with
+//! `n` the completed-retry count — the series [100, 500, 1500]. Both clamps
+//! of the gaxios `min()` (a `totalTimeout` remaining budget and
+//! `maxRetryDelay`) are injectable and unlimited by default. The sleeper and
+//! clock are injectable so tests assert delay sequences without real waiting.
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -52,6 +54,10 @@ pub type RefreshFn = Arc<dyn Fn() -> BoxFuture<'static, Result<String, CrspError
 /// Injectable backoff sleeper (spec §7.1): records or performs the delay.
 pub type SleepFn = Arc<dyn Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync>;
 
+/// Injectable monotonic-ish clock returning milliseconds (gaxios `Date.now()`
+/// equivalent), used for the `totalTimeout` remaining-budget clamp.
+pub type ClockFn = Arc<dyn Fn() -> u128 + Send + Sync>;
+
 /// Parameters for building an authenticated [`ApiClient`].
 #[derive(Clone)]
 pub struct ApiClientConfig {
@@ -61,6 +67,15 @@ pub struct ApiClientConfig {
     pub refresh: RefreshFn,
     /// Optional injectable sleeper; defaults to `tokio::time::sleep`.
     pub sleeper: Option<SleepFn>,
+    /// `maxRetryDelay` clamp for the backoff `min()` (gaxios default:
+    /// effectively unlimited). `None` = unlimited.
+    pub max_retry_delay: Option<Duration>,
+    /// `totalTimeout` budget for the backoff `min()` (gaxios default:
+    /// effectively unlimited). `None` = unlimited.
+    pub total_timeout: Option<Duration>,
+    /// Optional injectable clock (milliseconds) for the `totalTimeout`
+    /// remaining-budget computation; defaults to the wall clock.
+    pub clock: Option<ClockFn>,
 }
 
 impl ApiClientConfig {
@@ -69,6 +84,9 @@ impl ApiClientConfig {
             access_token: access_token.into(),
             refresh,
             sleeper: None,
+            max_retry_delay: None,
+            total_timeout: None,
+            clock: None,
         }
     }
 }
@@ -144,6 +162,9 @@ pub struct ApiClient {
     access_token: StdMutex<String>,
     refresh: RefreshFn,
     sleeper: SleepFn,
+    max_retry_delay: Option<Duration>,
+    total_timeout: Option<Duration>,
+    clock: ClockFn,
 }
 
 impl ApiClient {
@@ -169,6 +190,9 @@ impl ApiClient {
             access_token: StdMutex::new(config.access_token),
             refresh: config.refresh,
             sleeper: config.sleeper.unwrap_or_else(default_sleeper),
+            max_retry_delay: config.max_retry_delay,
+            total_timeout: config.total_timeout,
+            clock: config.clock.unwrap_or_else(default_clock),
         })
     }
 
@@ -231,6 +255,7 @@ impl ApiClient {
         let mut network_retries: u32 = 0;
         let mut completed_retries: u32 = 0;
         let mut refreshed = false;
+        let time_of_first_request = (self.clock)();
 
         loop {
             match self.attempt(request).await {
@@ -238,7 +263,8 @@ impl ApiClient {
                     // Network/no-response failure (timeouts included, §7.2).
                     if idempotent && network_retries < MAX_NETWORK_RETRIES {
                         network_retries += 1;
-                        self.wait(completed_retries).await;
+                        let elapsed = (self.clock)().saturating_sub(time_of_first_request);
+                        self.wait(completed_retries, elapsed).await;
                         completed_retries += 1;
                         continue;
                     }
@@ -264,7 +290,8 @@ impl ApiClient {
                         && status_retries < MAX_STATUS_RETRIES
                     {
                         status_retries += 1;
-                        self.wait(completed_retries).await;
+                        let elapsed = (self.clock)().saturating_sub(time_of_first_request);
+                        self.wait(completed_retries, elapsed).await;
                         completed_retries += 1;
                         // Drain the body so the connection can be reused.
                         let _ = response.bytes().await;
@@ -289,10 +316,14 @@ impl ApiClient {
         builder.send().await
     }
 
-    /// Backoff before the next retry (spec §7.1): 100ms for the first retry,
-    /// then `100 + ((2^n − 1) / 2) × 1000ms` with `n` = retries performed.
-    async fn wait(&self, completed_retries: u32) {
-        let millis = retry_delay_ms(completed_retries);
+    /// Backoff before the next retry (spec §7.1). `elapsed` is measured from
+    /// the first request via the injectable clock.
+    async fn wait(&self, completed_retries: u32, elapsed_ms: u128) {
+        let remaining_total_ms = self
+            .total_timeout
+            .map(|total| total.as_millis() as i128 - elapsed_ms as i128);
+        let max_retry_delay_ms = self.max_retry_delay.map(|max| max.as_millis());
+        let millis = retry_delay_ms(completed_retries, remaining_total_ms, max_retry_delay_ms);
         (self.sleeper)(Duration::from_millis(millis)).await;
     }
 }
@@ -301,11 +332,46 @@ fn default_sleeper() -> SleepFn {
     Arc::new(|duration| Box::pin(tokio::time::sleep(duration)))
 }
 
-/// `100 + ((2^n − 1) / 2) × 1000` — the retry backoff in milliseconds for
-/// `n` retries already performed (n=0 yields the 100ms first-retry delay).
-fn retry_delay_ms(completed_retries: u32) -> u64 {
+fn default_clock() -> ClockFn {
+    Arc::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default()
+    })
+}
+
+/// gaxios 7.3.1 `getNextRetryDelay` (build/cjs/src/retry.js — the binding
+/// authority for spec §7.1), verbatim semantics:
+///
+/// ```js
+/// const retryDelay = config.currentRetryAttempt ? 0 : (config.retryDelay ?? 100);
+/// const calculatedDelay = retryDelay + ((Math.pow(2, config.currentRetryAttempt) - 1) / 2) * 1000;
+/// return Math.min(calculatedDelay, maxAllowableDelay, config.maxRetryDelay);
+/// ```
+///
+/// The 100ms base applies only to the first retry (`currentRetryAttempt ==
+/// 0`); the pow term uses the completed-retry count, giving the series
+/// [100, 500, 1500]. `remaining_total_ms` is `totalTimeout − elapsed`
+/// (unlimited when `None`); a negative remaining budget clamps to an
+/// immediate retry, matching gaxios's negative `setTimeout`. The
+/// `(2^n − 1) × 500` form keeps the `/ 2 × 1000` arithmetic integer-exact.
+fn retry_delay_ms(
+    completed_retries: u32,
+    remaining_total_ms: Option<i128>,
+    max_retry_delay_ms: Option<u128>,
+) -> u64 {
     let n = completed_retries.min(62);
-    100 + ((2u64.pow(n) - 1) * 500)
+    let base: u128 = u128::from(completed_retries == 0) * 100;
+    let calculated = base + (2u128.pow(n) - 1) * 500;
+    let mut delay = calculated;
+    if let Some(remaining) = remaining_total_ms {
+        delay = delay.min(remaining.max(0) as u128);
+    }
+    if let Some(max) = max_retry_delay_ms {
+        delay = delay.min(max);
+    }
+    delay as u64
 }
 
 /// Methods that gaxios considers retryable (spec §7.1). POST is excluded.

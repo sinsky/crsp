@@ -79,6 +79,14 @@ fn recorder_client(
     base: &str,
     refresh: impl Fn() -> BoxFuture<'static, Result<String, CrspError>> + Send + Sync + 'static,
 ) -> (ApiClient, Recorder) {
+    recorder_client_with(base, refresh, |_| {})
+}
+
+fn recorder_client_with(
+    base: &str,
+    refresh: impl Fn() -> BoxFuture<'static, Result<String, CrspError>> + Send + Sync + 'static,
+    tune: impl FnOnce(&mut ApiClientConfig),
+) -> (ApiClient, Recorder) {
     let delays: Delays = Arc::default();
     let refreshes = Arc::new(AtomicUsize::new(0));
     let client = {
@@ -89,15 +97,14 @@ fn recorder_client(
             refreshes_for_fn.fetch_add(1, Ordering::SeqCst);
             refresh()
         });
-        ApiClient::with_base_urls(
-            ApiClientConfig::new(ACCESS_TOKEN, refresh_fn),
-            base_urls_all(base),
-        )
-        .expect("client construction")
-        .with_sleeper(Arc::new(move |duration: Duration| {
-            let delays = Arc::clone(&delays_for_sleeper);
-            Box::pin(async move { delays.lock().unwrap().push(duration.as_millis() as u64) })
-        }))
+        let mut config = ApiClientConfig::new(ACCESS_TOKEN, refresh_fn);
+        tune(&mut config);
+        ApiClient::with_base_urls(config, base_urls_all(base))
+            .expect("client construction")
+            .with_sleeper(Arc::new(move |duration: Duration| {
+                let delays = Arc::clone(&delays_for_sleeper);
+                Box::pin(async move { delays.lock().unwrap().push(duration.as_millis() as u64) })
+            }))
     };
     (client, Recorder { delays, refreshes })
 }
@@ -1221,7 +1228,7 @@ async fn get_retries_transient_statuses_with_backoff_delays() {
 
     let requests = received_requests(&h.server).await;
     assert_eq!(requests.len(), 4, "initial + 3 status retries");
-    assert_eq!(h.recorder.delays(), vec![100, 600, 1600]);
+    assert_eq!(h.recorder.delays(), vec![100, 500, 1500]);
     for request in &requests {
         assert_bearer(request, ACCESS_TOKEN);
     }
@@ -1248,7 +1255,7 @@ async fn get_stops_after_three_status_retries() {
         "Request failed with status code 500",
     );
     assert_eq!(received_requests(&h.server).await.len(), 4);
-    assert_eq!(h.recorder.delays(), vec![100, 600, 1600]);
+    assert_eq!(h.recorder.delays(), vec![100, 500, 1500]);
 }
 
 #[tokio::test]
@@ -1440,7 +1447,7 @@ async fn network_errors_retry_twice_max() {
     );
     assert_eq!(
         recorder.delays(),
-        vec![100, 600],
+        vec![100, 500],
         "initial + max 2 network retries"
     );
 }
@@ -1523,7 +1530,7 @@ async fn network_and_status_retry_counters_are_independent() {
         "got {error:?}"
     );
     // 1 status retry (500) + 2 network retries, each delaying per the formula.
-    assert_eq!(recorder.delays(), vec![100, 600, 1600]);
+    assert_eq!(recorder.delays(), vec![100, 500, 1500]);
 }
 
 #[tokio::test]
@@ -1549,6 +1556,82 @@ async fn retry_after_header_is_ignored() {
     // Retry-After: 120 must be ignored in favor of the 100ms first-retry delay.
     assert_eq!(h.recorder.delays(), vec![100]);
     assert_eq!(received_requests(&h.server).await.len(), 2);
+}
+
+/// gaxios `getNextRetryDelay` clamps: `min(calculated, maxRetryDelay)`. With
+/// `maxRetryDelay` = 200ms the series becomes [100, 200] (calculated 500ms is
+/// clamped; the defaults leave it unlimited).
+#[tokio::test]
+async fn max_retry_delay_clamps_the_backoff_series() {
+    let base = closed_port_base().await;
+    let (client, recorder) = recorder_client_with(
+        &base,
+        || ok_refresh(),
+        |config| {
+            config.max_retry_delay = Some(Duration::from_millis(200));
+        },
+    );
+
+    let error = client
+        .request(ApiRequest {
+            method: reqwest::Method::GET,
+            url: format!("{base}/v1/projects/s1/versions"),
+            body: None,
+        })
+        .await
+        .expect_err("closed port fails");
+    assert!(
+        matches!(
+            error,
+            CrspError::Api {
+                kind: ApiErrorKind::UnexpectedApiError,
+                ..
+            }
+        ),
+        "got {error:?}"
+    );
+    assert_eq!(recorder.delays(), vec![100, 200]);
+}
+
+/// gaxios `getNextRetryDelay` clamp: `min(calculated, totalTimeout − elapsed)`.
+/// A scripted clock drives the elapsed time; once the total budget is
+/// exhausted the remaining budget goes negative and the retry fires
+/// immediately (gaxios passes a negative timeout to `setTimeout`).
+#[tokio::test]
+async fn total_timeout_clamps_the_backoff_series() {
+    let base = closed_port_base().await;
+    let clock_readings: Arc<Mutex<Vec<u128>>> = Arc::new(Mutex::new(vec![0, 2600, 5200]));
+    let (client, recorder) = recorder_client_with(
+        &base,
+        || ok_refresh(),
+        |config| {
+            config.total_timeout = Some(Duration::from_millis(3000));
+            let readings = Arc::clone(&clock_readings);
+            config.clock = Some(Arc::new(move || readings.lock().unwrap().remove(0)));
+        },
+    );
+
+    let error = client
+        .request(ApiRequest {
+            method: reqwest::Method::GET,
+            url: format!("{base}/v1/projects/s1/versions"),
+            body: None,
+        })
+        .await
+        .expect_err("closed port fails");
+    assert!(
+        matches!(
+            error,
+            CrspError::Api {
+                kind: ApiErrorKind::UnexpectedApiError,
+                ..
+            }
+        ),
+        "got {error:?}"
+    );
+    // Retry 1: remaining = 3000 − 2600 = 400 → min(100, 400) = 100.
+    // Retry 2: remaining = 3000 − 5200 < 0 → immediate (clamped to 0).
+    assert_eq!(recorder.delays(), vec![100, 0]);
 }
 
 // ---------------------------------------------------------------------------
