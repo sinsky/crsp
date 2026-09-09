@@ -45,7 +45,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - 出力規約: スピナーは TTY 時のみ。`--json` で JSON 出力 (§6.2 にコマンド別契約)。スピナー/警告は stderr、成果物は stdout。
 - API エラー正規化 `handleApiError`: 400→INVALID_ARGUMENT, 401→NOT_AUTHENTICATED, 403→NOT_AUTHORIZED, 404→NOT_FOUND, その他→UNEXPECTED_API_ERROR。
 - ページネーション `fetchWithPages`: 既定 pageSize 100 / maxPages 10 (最大1000件)、`{results, partialResults}` を返す。**例外**: Service Usage (list-apis) は pageSize 200 / maxResults 10000。
-- 未知コマンド: `program.ts:188` のメッセージは **ハードコードで `clasp` と表示** される (`Unknown command "clasp {command}"`)。crsp は `crsp` に置換 (§5.1)。usageエラーも exit 1。
+- 未知コマンド: `program.ts:188` のメッセージは **ハードコードで `clasp` と表示** される (`Unknown command "clasp {command}"`)。crsp は `crsp` に置換 (§5 #1)。usageエラーも exit 1。
 
 ### 2.2 REST エンドポイント一覧 (crsp/api/ の実装対象)
 
@@ -74,6 +74,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - 発見: `-P` がパス/ディレクトリ指定ならそこから、なければ cwd から find-up。
 - パースは **JSON5** (コメント・シングルクォート許容)。書き込みはプレーン JSON 2スペース。
 - キー: `scriptId`, `projectId`, `parentId` (配列なら先頭), `srcDir`|`rootDir` → contentDir (プロジェクトルート外はエラー), `filePushOrder`, `fileExtension`(レガシー), `scriptExtensions` (既定 `[".js",".gs"]`), `htmlExtensions` (既定 `[".html"]`), `jsonExtensions` (既定 `[".json"]`), `skipSubdirectories`, `allowSymlinks`。
+- **空文字列のedge**: `srcDir`/`rootDir` が空文字列 `""` の場合は未設定扱い (falsy) → contentDir = プロジェクトルート (`clasp.ts:208` の `config.srcDir || config.rootDir || '.'` 互換)。
 - `updateSettings` (clone/create/MCP create/clone 時の書き込み) は **常に** `scriptId`, `rootDir` (=srcDir), `parentId`, `projectId`, `scriptExtensions`, `htmlExtensions`, `jsonExtensions`, `filePushOrder: []` (常に空配列リセット), `skipSubdirectories` を書く。
 
 **`.claspignore`**
@@ -150,7 +151,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 | 24 | `open-container` | — | なし | なし | `parentId` 必須 → `https://drive.google.com/open?id={id}` |
 | 25 | `open-web-app` | — | `[deploymentId]` | なし | deployments から WEB_APP entry point のURL取得 |
 | 26 | `open-logs` | — | なし | なし | Cloud Console logs viewer |
-| 27 | `open-apis-console` | — | なし | なし | GCP APIs dashboard |
+| 27 | `open-api-console` | — | なし | なし | GCP APIs dashboard |
 | 28 | `open-credentials-setup` | — | なし | なし | GCP credentials ページ |
 | 29 | `start-mcp-server` | `mcp` | なし | なし | MCP stdio サーバー起動 |
 
@@ -184,21 +185,22 @@ open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` �
 
 **並列度**: 書き込みは `pMap(files, mapper)` = **並列数無制限** (`files.ts:793`、p-mapのデフォルト)。crsp も無制限で再現 (§1.2 レイヤA: 動作互換)。
 
-### 2.7 MCP サーバー (実装参照)
+### 2.7 MCP サーバー (crsp契約 — clasp参照値は明記)
 
-- transport: **stdio** のみ。サーバー名 `Clasp`、バージョン = CLIバージョン (crspでは `Crsp` に変更 — §5.2)。
-- ツール5つと annotations (全ツール共通: `openWorldHint: false, destructiveHint: true, idempotentHint: false, readOnlyHint: false`):
+- transport: **stdio** のみ。**crspのサーバー名は `Crsp`** (clasp実装は `Clasp`, `server.ts:73` — §5 #2で変更)。バージョン = CLIバージョン。
+- ツール5つと annotations (claspでは全ツール共通 `openWorldHint: false, destructiveHint: true, idempotentHint: false, readOnlyHint: false`。crspは `list_projects` のみ修正 — §5 #10):
 
 | ツール | 入力 | 出力 (text + structuredContent) |
 |---|---|---|
-| `push_files` | `projectDir` (必須) | text: 成功文言 + `Updated file: {abs path}` ×N。structured: `{scriptId, projectDir, files[]}`。**crspは非標準フィールド `status: 'success'` を廃止** (§5.3) |
-| `pull_files` | `projectDir` (必須) | 同構造。claspは文言バグ (`Pushed project...` と成功表示, `Error cloning project` とエラー表示) → **crspは修正** (§5.3) |
+| `push_files` | `projectDir` (必須) | text: 成功文言 + `Updated file: {abs path}` ×N。structured: `{scriptId, projectDir, files[]}`。**crspは非標準フィールド `status: 'success'` を廃止** (§5 #4) |
+| `pull_files` | `projectDir` (必須) | 同構造。claspは文言バグ (`Pushed project...` と成功表示 `server.ts:226`、`Error cloning project` とエラー表示 `server.ts:244`) → **crspは修正** (§5 #3) |
 | `create_project` | `projectDir` (必須), `sourceDir?`, `projectName?` | `mkdir` → `createScript` → 初期pull → `updateSettings`。structured: `{scriptId, projectDir, files[]}` |
-| `clone_project` | `projectDir` (必須), `sourceDir?`, `scriptId?` (**実質必須**: 省略時 `Script ID is required.` エラー) | pull → `updateSettings`。claspはtitleコピー版 (`Create Apps Script project`) → crspは修正 (§5.3) |
+| `clone_project` | `projectDir` (必須), `sourceDir?`, `scriptId?` (**実質必須**: 省略時 `Script ID is required.` エラー `server.ts:412-419`) | pull → `updateSettings`。claspはtitle誤り → crspは修正 (§5 #3) |
 | `list_projects` | **なし (空オブジェクト `{}`)** | text: `Found N ...` + `{name} ({id})`。structured: `{scripts: [{scriptId, name}]}` |
 
 - パスjail `validateProjectDir`: resolve後、**homedir または cwd 配下のみ許可** (`Security Error: projectDir must be within the user home directory or current working directory. Resolved path "X" is not permitted.`)。
-- **`sourceDir` の解決基準**: ツール説明は「projectDir 相対」と記載されるが、実際は **生のパスを `validateProjectDir` (homedir/cwd jail) に通すだけ** (`server.ts:315-321`)。相対指定は cwd 基準で解決される。crsp はこの挙動を保持し、**ツール説明文のみ修正** (§5.3)。
+- **`sourceDir` の参照実装における不整合** (claspの現状): ①検証は生パスを `validateProjectDir` (homedir/cwd jail) に通すだけ (`server.ts:315-321`)、②実際のcontentDir解決は `withContentDir` が **`projectRootDir` 相対** で行う (`clasp.ts:129-141`)。検証基準 (cwd) と読み書き基準 (projectDir) が一致していない。
+  - **crspの方針 (§5 #5)**: `sourceDir` は **`projectDir` 相対** で解決し、解決後のパスが **`projectDir` 配下** であることをjailとして検証する。ツール説明文もこれに一致させる。
 - ツール呼び出しごとに `Clasp` インスタンスを新規構築 (ステートレス)。
 
 ## 3. crsp アーキテクチャ
@@ -229,7 +231,7 @@ crsp/
 │   │   └── serverless_flow.rs   # URLコピペ
 │   ├── api/
 │   │   ├── script.rs / drive.rs / service_usage.rs / logging.rs / oauth2.rs / discovery.rs
-│   │   └── error.rs         # ApiErrorKind + リトライ (§7.3)
+│   │   └── error.rs         # ApiErrorKind + リトライ (§7.1)
 │   └── mcp/server.rs        # rmcp stdio, 5ツール
 └── tests/                   # 統合テスト (§9)
 ```
@@ -250,8 +252,9 @@ crsp/
 | ブラウザ | `open` | |
 | ホームディレクトリ | `home` | 公式メンテ (cargo使用) |
 | OAuth暗号 | `rand` + `sha2` + `base64` | PKCE S256, state 256bit |
-| URL/文字列処理 | `url`, `regex` | clone時のURL抽出等 |
+| URL/文字列処理 | `url`, `regex`, `inflector` | clone時のURL抽出、create-script既定titleのhumanize (inflection互換) |
 | 時刻 | `time` | expiry_date (epoch ms), ログISO表示 |
+| ログ | `tracing` + `tracing-subscriber` (env-filter) | claspの `Debug('clasp:*')` 相当 (`CRSP_DEBUG` または `RUST_LOG`) |
 | localhost redirect | `tiny_http` | 1ルートのみで十分 (axumより軽量) |
 | MCP | `rmcp` | stdio transport |
 | エラー | `thiserror` + `anyhow` | mainでの表示用 |
@@ -295,7 +298,7 @@ crsp/
 | 2 | MCPサーバー名 | `Clasp` | `Crsp` | ツール名・スキーマ・annotations は不変 |
 | 3 | MCP文言バグ | `pull_files` 成功文が `Pushed project...`、エラー文が `Error cloning project`、`clone_project` のtitle誤り | `pull_files` 成功 `Pulled project in {dir} to local filesystem successfully.`、エラー `Error pulling project`、title `Clone Apps Script project` | text内容のみ変更、structuredContent/エラー形式は不変 |
 | 4 | MCP `push_files` の `status: 'success'` | 非標準フィールド付与 | 廃止 (標準JSON-RPC envelopeに準拠) | structuredContent から除外 |
-| 5 | MCP `sourceDir` の説明文 | 「projectDir 相対」と説明するが実挙動は cwd 基準 jail 検証 | 実挙動は不変、説明文を実挙動に一致させる | description text のみ変更 |
+| 5 | MCP `sourceDir` の解決 | 検証が生パスの homedir/cwd jail、実際の解決は projectRootDir 相対 — 2段階で基準不一致 (`server.ts:315-321` + `clasp.ts:129-141`) | **`sourceDir` を `projectDir` 相対で解決し、解決後パスが `projectDir` 配下であることを検証** (仕様・検証・実装を一致) | 絶対パス指定は同等動作。相対パス指定の挙動が変わる (projectDir基準に統一)。エラー時 exit/エラー形式は不変 |
 | 6 | tail-logs デバッグ出力 | `console.log('PAST', projectId)` を毎回出力 | 削除 | 出力1行減、exit code 不変 |
 | 7 | `status` のJSON | 単一行 | 2スペース pretty (他コマンドと統一) | JSONパース結果は同一 |
 | 8 | `delete` の `--json` | 無視 | `{"success": true}` を出力 | 新規出力、exit code 不変 |
@@ -312,57 +315,66 @@ crsp/
 - APIエラーはHTTP statusから `ApiErrorKind` へ正規化し、コマンドはkindで分岐 (例: run-function → NotAuthorized で「API executable deploy」注意喚起、NotFound で関数不在メッセージ)。
 - exit code: 成功0、エラー1、usageエラー1 (clapの既定2を1に上書き — commander互換)。
 
-### 6.2 `--json` 出力マトリクス (コマンド別契約)
+### 6.2 `--json` 出力マトリクス (コマンド別契約・出所参照付き)
 
-| コマンド | `--json` 出力 | 備考 |
+| コマンド | `--json` 出力 | clasp出所 |
 |---|---|---|
-| login | `{"email": "..."}` (2sp) | |
-| logout | `{"success": true}` | トークン有無で同一 |
-| show-authorized-user | `{"loggedIn", "email", "clientId", "clientType"}` | 未ログイン時 `{"loggedIn": false}` |
-| clone-script | `{"scriptId", "files": [...]}` | |
-| create-script | `{"scriptId", "parentId", "files": [...]}` | parentId null 可 |
-| push | `[path, ...]` (2sp) | watchループ毎に出力 |
-| pull | `{"pulledFiles": [...], "deletedFiles": [...]}` | |
-| create-deployment | `{"deploymentId", "versionNumber", "description"}` | |
-| update-deployment | 同上 | ローカル `--json` も同義 |
-| delete-deployment | `{"deletedDeploymentIds": [...]}` | なし時 `[]` |
-| create-version | `{"versionNumber": N}` | |
-| list-versions | `[{"versionNumber", "description"}]` | |
-| list-deployments | `[{"deploymentId", "versionNumber", "description"}]` | |
-| list-scripts | `[{"id", "name"}]` | |
-| run-function | `{"response": <value>, "error": {...}?}` | error は失敗時のみ |
-| show-file-status | `{"filesToPush": [...], "untrackedFiles": [...]}` | crspでは pretty (§5.7) |
-| list-apis | `{"enabledApis": [...], "availableApis": [...]}` | |
-| enable-api | `{"success": true}` | |
-| disable-api | `{"success": true, "disabledService": "..."}` | |
-| setup-logs | `{"success": true}` | |
-| delete-script | **crsp追加: `{"success": true}`** (claspは出力なし) | §5.8 |
-| open-* | `{"url": "..."}` + **stdout に `Opening {url} in your browser.` 行** (clasp互換維持) | JSON純度は崩れるが clasp と同一。文書化済みquirk |
-| tail-logs | LogEntry 1件につき 2sp JSON | |
-| start-mcp-server | MCPプロトコル (CLI出力なし) | |
+| login | `{"email": "..."}` (2sp) | `commands/login.ts` |
+| logout | `{"success": true}` (トークン有無で同一) | `commands/logout.ts` |
+| show-authorized-user | `{"loggedIn", "email", "clientId", "clientType"}` (未ログイン時 `{"loggedIn": false}`) | `commands/show-authorized-user.ts` |
+| clone-script | `{"scriptId", "files": [...]}` | `commands/clone-script.ts` |
+| create-script | `{"scriptId", "parentId", "files": [...]}` (parentId null 可) | `commands/create-script.ts` |
+| push | `[path, ...]` (2sp, watchループ毎に出力) | `commands/push.ts` |
+| pull | `{"pulledFiles": [...], "deletedFiles": [...]}` | `commands/pull.ts` |
+| create-deployment | `{"deploymentId", "versionNumber", "description"}` | `commands/create-deployment.ts` |
+| update-deployment | 同上 (ローカル `--json` も同義) | `commands/update-deployment.ts` |
+| delete-deployment | `{"deletedDeploymentIds": [...]}` (なし時 `[]`) | `commands/delete-deployment.ts` |
+| create-version | `{"versionNumber": N}` | `commands/create-version.ts` |
+| list-versions | `[{"versionNumber", "description"}]` | `commands/list-versions.ts` |
+| list-deployments | `[{"deploymentId", "versionNumber", "description"}]` | `commands/list-deployments.ts` |
+| list-scripts | `[{"id", "name"}]` | `commands/list-scripts.ts:42-48` |
+| run-function | `{"response": <value>, "error": {...}?}` (errorは失敗時のみ) | `commands/run-function.ts` |
+| show-file-status | `{"filesToPush": [...], "untrackedFiles": [...]}` (crspでは pretty — §5 #7) | `commands/show-file-status.ts` |
+| list-apis | `{"enabledApis": [...], "availableApis": [...]}` | `commands/list-apis.ts` |
+| enable-api | `{"success": true}` | `commands/enable-api.ts` |
+| disable-api | `{"success": true, "disabledService": "..."}` | `commands/disable-api.ts` |
+| setup-logs | `{"success": true}` | `commands/setup-logs.ts` |
+| delete-script | **crsp追加: `{"success": true}`** (claspは出力なし — §5 #8) | `commands/delete-script.ts` |
+| open-* | `{"url": "..."}` + stdoutに行表示: ブラウザあり `Opening {url} in your browser.` / なし `Open {url} in your browser to continue.` (clasp互換維持 — `commands/utils.ts:180-202`) | `commands/open-*.ts`, `commands/utils.ts` |
+| tail-logs | LogEntry 1件につき 2sp JSON | `commands/tail-logs.ts` |
+| start-mcp-server | MCPプロトコル (CLI出力なし) | `commands/start-mcp.ts` |
 
 JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先し、quirk として保守する。
 
 ## 7. API失敗・再試行・認証同時実行契約
 
-### 7.1 再試行 (gaxios デフォルト互換)
+### 7.1 再試行 (gaxios 7.3.1 デフォルト互換 — 実パッケージソースで確認済み)
 
-- 対象ステータス: **429, 500, 502, 503, 504** + ネットワーク層エラー (接続失敗)。
-- 方式: 全HTTPメソッドに適用 (clasp/gaxios のデフォルト)。最大 **3回**、初回 100ms、指数バックオフ ×2。429は `Retry-After` ヘッダ優先。
-- 非冪等POST (create version/deployment) も再試行対象 — クライアント側で二重作成の可能性は clasp と同様に受け入れる (レイヤA互換)。
-- リトライ上限超過で `Api(kind, message)`。
+claspは gaxios 7.3.1 (package-lock解決済み) のデフォルトリトライ設定で動作する。crspは同一契約を再現し、§9.2 golden testで固定する:
+
+- **有効化**: デフォルトON (`retry: true`)。
+- **対象メソッド**: `GET, HEAD, PUT, OPTIONS, DELETE` — **POST は対象外** (create version/deployment等の非冪等POSTは再試行されない → 重複作成リスクなし)。
+- **対象ステータス**: `100–199`, `408`, `429`, `500–599`。ネットワーク層エラー (応答なし: ETIMEDOUT/ENOTFOUND等) は最大 **2回** (`noResponseRetries`)。
+- **リトライ回数**: 最大 **3回** (`retry: 3`、初回+3で最大4リクエスト)。
+- **遅延**: 初回リトライ `retryDelay` (既定 **100ms**)、以降 `100 + ((2^n − 1)/2) × 1000 ms` (n=currentRetryAttempt、`retryDelayMultiplier: 2`)。上限は `maxRetryDelay` (既定実質無制限) と totalTimeout 残時間 (`totalTimeout` 既定実質無制限)。`Retry-After` ヘッダは **考慮されない**。
+- 中断 (abort/signal): 再試行なし。
 
 ### 7.2 タイムアウト
 
-- リクエストタイムアウト 30s、接続タイムアウト 10s (reqwest設定)。タイムアウトはネットワークエラー扱いで再試行対象。
+- リクエストタイムアウト 30s、接続タイムアウト 10s (reqwest設定)。タイムアウトはネットワークエラー扱い (応答なしなら再試行対象、§7.1)。
 - localhost認証サーバーはタイムアウトなし (ユーザー操作待ち、Ctrl+Cまで)。
 
-### 7.3 トークンリフレッシュ
+### 7.3 ページング失敗と部分結果 (`core/utils.ts:186-214` 準拠)
+
+- **limit到達による部分結果** (正常系): `nextPageToken` が残ったまま `maxPages` (既定10) または `maxResults` に到達 → 取得済み結果を `partialResults: true` で返し、警告表示。**exit 0**。
+- **HTTP失敗**: 途中ページの取得例外は捕捉**しない** → エラーとして伝播し、**exit 1**。部分結果は返さない。
+- **maxResults超過トリミング**: 取得件数が `maxResults` を超えた場合は切り詰めて `partialResults: true` (正常系)。
+
+### 7.4 トークンリフレッシュ
 
 - 401/`invalid_grant` 時: リフレッシュ → 1回だけ再試行。
 - リフレッシュ失敗: `Auth` エラー (`NOT_AUTHENTICATED`)、トークンを**上書きしない**、`crsp login` を促すメッセージ。
 - リフレッシュ成功: `.clasprc.json` 再保存 (0600/O_NOFOLLOW)。並行プロセスでの同時リフレッシュは **last-write-wins、lockなし** (clasp互換)。POSIXでのchmod失敗時は警告を出し保存は続行。
-- 部分ページング失敗: 途中ページで失敗したら `partialResults: true` で既取得分を返し警告 (claspの `fetchWithPages` 互換)。 exit code 0。
 
 ## 8. パス・ディレクトリモデル (jail判定の基準)
 
@@ -375,9 +387,9 @@ JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先�
 ```
 
 - **プロジェクトルート** = `.clasp.json` を発見したディレクトリ。`.claspignore` はここに置く。
-- **contentDir** = プロジェクトルート + `srcDir|rootDir` (未設定ならルート自身)。**jail判定はcontentDirをrealpath解決した値に対して** 行う (ファイル読書き・削除・リモート由来パスすべて)。
+- **contentDir** = プロジェクトルート + `srcDir|rootDir` (未設定・空文字列ならルート自身)。**jail判定はcontentDirをrealpath解決した値に対して** 行う (ファイル読書き・削除・リモート由来パスすべて)。CLIの `--rootDir` も同様にプロジェクトルート相対で解決 (`withContentDir`, `clasp.ts:129-141`)。
 - **認証 jail**: `.clasprc.json` のパス (または `-A` 指定先) への symlink 防御は `O_NOFOLLOW` + 事前 `symlink_metadata`。
-- **MCP jail**: `projectDir` = `resolve(与えられたパス)` が homedir 自身または homedir 配下、もしくは cwd 自身または cwd 配下であること。`sourceDir` = 同一 jail を **cwd 基準 resolve で**適用 (§5.5: 説明文のみ修正)。
+- **MCP jail**: `projectDir` = `resolve(与えられたパス)` が homedir 自身または homedir 配下、もしくは cwd 自身または cwd 配下であること。`sourceDir` = **`projectDir` 相対** で解決し、解決後パスが `projectDir` 配下であること (§5 #5 — claspの2段階基準不一致を統一)。
 - **OS差異**: macOS/Windows の大文字小文字非区別 FS 上では、大文字小文字違いの衝突 (`a.js` vs `A.js`) は検出しない (claspと同様、既知の制限として文書化)。Windows の symlink 保護は POSIX 機構が無いためベストエフォート (§2.3)。
 
 ## 9. テスト戦略 (golden test 形式 + live test 分離)
@@ -387,7 +399,7 @@ JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先�
 | レイヤ | 手法 |
 |---|---|
 | core unit | ignoreマッチャー・config発見・manifest・衝突検出・pagination・jail判定を網羅 (純粋関数) |
-| APIクライアント | `wiremock` でエンドポイントモック。トークンリフレッシュ・401再試行・リトライ429/5xx・Retry-After含む |
+| APIクライアント | `wiremock` でエンドポイントモック。トークンリフレッシュ・401再試行・リトライ契約 (§7.1: メソッド/ステータス/遅延系列/noResponseRetries) 含む |
 | CLI統合 | `assert_cmd` + `tempfile` 仮想プロジェクト |
 | MCP | rmcp クライアントで5ツールのschema/出力検証 |
 
@@ -396,10 +408,10 @@ JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先�
 各golden caseは以下を **ファイルとして固定** し、CIで機械比較する:
 
 1. `fixture/` — 入力: `.clasp.json` / `.clasprc.json` / `.claspignore` / ソースファイルツリー (実claspで生成した実物)
-2. `mock-transcript.toml` — wiremockに流す HTTP リクエスト/レスポンス ペア (実claspが発するリクエストを記録)
+2. `mock-transcript.toml` — wiremockに流す HTTP リクエスト/レスポンス ペア (実claspが発するリクエストを記録)。**リトライ挙動もここに固定** (§7.1の gaxios互換契約: 対象メソッド/ステータス/遅延系列を含む)
 3. `expected.json` — 期待値: stdout/stderr (§5差分部分はマスク付き)、exit code、書き換え後のファイルツリースナップショット、APIリクエストbody
 
-比較方法: crsp実行結果を expected と突き合わせ。`Unknown command` 等の `crsp` 文字列置換差分 (§5.1) は expected に crsp 版を直接記載。
+比較方法: crsp実行結果を expected と突き合わせ。`Unknown command` 等の `crsp` 文字列置換差分 (§5 #1) は expected に crsp 版を直接記載。
 
 ### 9.3 Live test (分離)
 
