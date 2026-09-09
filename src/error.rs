@@ -4,17 +4,7 @@
 
 use std::io;
 
-/// API failure categories normalized from HTTP status codes (spec §2.1):
-/// 400 -> `InvalidArgument`, 401 -> `NotAuthenticated`, 403 -> `NotAuthorized`,
-/// 404 -> `NotFound`, everything else -> `UnexpectedApiError`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApiErrorKind {
-    InvalidArgument,
-    NotAuthenticated,
-    NotAuthorized,
-    NotFound,
-    UnexpectedApiError,
-}
+pub use crate::api::error::ApiErrorKind;
 
 /// The single error type surfaced by [`crate::run`] and rendered by `main`.
 #[derive(Debug, thiserror::Error)]
