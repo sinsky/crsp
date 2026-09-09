@@ -623,6 +623,26 @@ async fn public_pull_result_preserves_all_skip_reasons() {
     assert_eq!(fs::read_to_string(src.join("target.js")).unwrap(), "before");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn real_eloop_is_reported_as_symlink_loop() {
+    use std::os::unix::fs::symlink;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    symlink(src.join("x.js"), src.join("t.js")).unwrap();
+    symlink(src.join("x.js"), src.join("x.js")).unwrap();
+    let result = pull_files(&[PullFile::new("t", "SERVER_JS", "source")], &src, true, 32)
+        .await
+        .unwrap();
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|item| item.reason == SkipReason::SymlinkLoop)
+    );
+}
+
 #[tokio::test]
 async fn fixture_tree_matches_expected_snapshot() {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/files/source");

@@ -117,14 +117,18 @@ fn delete_bound(
     let name_c = CString::new(name.as_bytes())
         .map_err(|_| CrspError::Validation("invalid deletion name".to_string()))?;
     let result = unsafe { libc::unlinkat(fd, name_c.as_ptr(), 0) };
-    let errno = std::io::Error::last_os_error().raw_os_error();
+    let unlink_error = if result == 0 {
+        None
+    } else {
+        Some(std::io::Error::last_os_error())
+    };
     unsafe {
         libc::close(fd);
     }
-    if result == 0 || errno == Some(libc::ENOENT) {
-        Ok(result == 0)
-    } else {
-        Err(std::io::Error::last_os_error().into())
+    match unlink_error {
+        None => Ok(true),
+        Some(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(false),
+        Some(error) => Err(error.into()),
     }
 }
 

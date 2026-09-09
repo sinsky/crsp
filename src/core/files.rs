@@ -336,11 +336,7 @@ pub fn pull_file_with_fault(
             current = current.parent().unwrap_or(content_dir);
         }
     }
-    if !write_remote_file(content_dir, &target, allow_symlinks, &file.source)
-        .map_err(|_| SkipReason::RaceCondition)?
-    {
-        return Err(SkipReason::ParentSymlink);
-    }
+    write_remote_file(content_dir, &target, allow_symlinks, &file.source)?;
     Ok(Some(
         normalize_slashes(
             target
@@ -367,7 +363,7 @@ fn write_remote_file(
     target: &Path,
     allow_symlinks: bool,
     source: &str,
-) -> Result<bool, SkipReason> {
+) -> Result<(), SkipReason> {
     if !allow_symlinks
         && fs::symlink_metadata(content_dir)
             .map(|metadata| metadata.file_type().is_symlink())
@@ -427,7 +423,7 @@ fn write_remote_file(
         .map_err(|_| SkipReason::RaceCondition)?;
     file.write_all(source.as_bytes())
         .map_err(|_| SkipReason::RaceCondition)?;
-    Ok(true)
+    Ok(())
 }
 
 fn verify_or_create_parent(
