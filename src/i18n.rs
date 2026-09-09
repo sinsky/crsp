@@ -177,3 +177,186 @@ pub const ADC_SERVICE_ACCOUNT_UNSUPPORTED: &str = "Service account credentials a
 pub fn access_token_request_failed(detail: &str) -> String {
     format!("Failed to fetch access token: {detail}")
 }
+
+// ---------------------------------------------------------------------------
+// Project lifecycle and version/deployment commands (spec §2.5 rows 4-15;
+// clasp commands/clone-script.ts, create-script.ts, create-version.ts,
+// list-versions.ts, create-deployment.ts, update-deployment.ts,
+// delete-deployment.ts, list-deployments.ts, list-scripts.ts,
+// delete-script.ts, core/project.ts)
+// ---------------------------------------------------------------------------
+
+/// `Project file already exists.` (clasp clone-script.ts:39,
+/// create-script.ts:63).
+pub const PROJECT_FILE_ALREADY_EXISTS: &str = "Project file already exists.";
+
+/// `No script ID.` (clasp clone-script.ts:80).
+pub const NO_SCRIPT_ID: &str = "No script ID.";
+
+/// `Invalid script ID.` (clasp clone-script.ts:146).
+pub const INVALID_SCRIPT_ID: &str = "Invalid script ID.";
+
+/// `Clone which script?` (clasp clone-script.ts:65).
+pub const CLONE_WHICH_SCRIPT: &str = "Clone which script?";
+
+/// `Security Warning: Skipping write of {file} ({reason}).` (clasp
+/// clone-script.ts:107).
+pub fn security_warning_skipping_write(file: &str, reason: &str) -> String {
+    format!("Security Warning: Skipping write of {file} ({reason}).")
+}
+
+/// `Unexpected error, script ID missing from response.` (clasp
+/// project.ts:101).
+pub const UNEXPECTED_SCRIPT_ID_MISSING: &str = "Unexpected error, script ID missing from response.";
+
+/// `Unexpected error, container ID missing from response.` (clasp
+/// project.ts:171).
+pub const UNEXPECTED_CONTAINER_ID_MISSING: &str =
+    "Unexpected error, container ID missing from response.";
+
+/// `Security Error: Remote file name "{name}" attempts to write outside the
+/// project directory.` (clasp files.ts fetchRemote jail check).
+pub fn remote_file_attempts_outside_write(name: &str) -> String {
+    format!(
+        "Security Error: Remote file name \"{name}\" attempts to write outside the project directory."
+    )
+}
+
+/// `Invalid script type "{type}". Valid types are: {validTypes}.` (clasp
+/// create-script.ts:87).
+pub fn invalid_script_type(script_type: &str, valid_types: &str) -> String {
+    format!("Invalid script type \"{script_type}\". Valid types are: {valid_types}.")
+}
+
+/// `Tip: to deploy this script as a {kind}, configure "{field}" in
+/// appsscript.json and run `clasp create-deployment`.` (clasp
+/// create-script.ts:152-154; the `clasp` literal is kept verbatim because the
+/// spec §5 differences do not amend this message).
+pub fn deployment_tip(deployment_kind: &str, manifest_field: &str) -> String {
+    format!(
+        "Tip: to deploy this script as a {deployment_kind}, configure \"{manifest_field}\" \
+         in appsscript.json and run `clasp create-deployment`."
+    )
+}
+
+/// `Give a description:` (clasp create-version.ts:37).
+pub const GIVE_A_DESCRIPTION: &str = "Give a description:";
+
+/// `Delete which deployment?` (clasp delete-deployment.ts:100).
+pub const DELETE_WHICH_DEPLOYMENT: &str = "Delete which deployment?";
+
+/// `Are you sure you want to delete the script?` (clasp delete-script.ts:37).
+pub const ARE_YOU_SURE_YOU_WANT_TO_DELETE_SCRIPT: &str =
+    "Are you sure you want to delete the script?";
+
+/// `Script ID not set, unable to delete the script.` (clasp
+/// delete-script.ts:28).
+pub const SCRIPT_ID_NOT_SET_UNABLE_TO_DELETE: &str =
+    "Script ID not set, unable to delete the script.";
+
+/// `No deployments found.` (clasp delete-deployment.ts:126).
+pub const NO_DEPLOYMENTS_FOUND: &str = "No deployments found.";
+
+/// `No deployments.` (clasp list-deployments.ts:50).
+pub const NO_DEPLOYMENTS: &str = "No deployments.";
+
+/// `No deployed versions of script.` (clasp list-versions.ts:52).
+pub const NO_DEPLOYED_VERSIONS: &str = "No deployed versions of script.";
+
+/// `No script files found.` (clasp list-scripts.ts:53).
+pub const NO_SCRIPT_FILES_FOUND: &str = "No script files found.";
+
+/// ICU en-US default number formatting for integer arguments (grouping every
+/// three digits), used by the `{count, plural}` `#` substitutions and
+/// `{version, number}` placeholders in clasp's messages.
+fn icu_number(value: i64) -> String {
+    let digits = value.unsigned_abs().to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    if value < 0 {
+        format!("-{grouped}")
+    } else {
+        grouped
+    }
+}
+
+/// `Found {count, plural, one {# version} other {# versions}}.` and siblings
+/// (clasp list-versions.ts:60, list-deployments.ts:57, list-scripts.ts:61).
+/// ICU plural: `one` applies to exactly 1 in the en locale.
+pub fn found_items(count: usize, singular: &str, plural: &str) -> String {
+    let word = if count == 1 { singular } else { plural };
+    format!("Found {} {word}.", icu_number(count as i64))
+}
+
+/// `Cloned {count, plural, =0 {no files.} one {one file.} other {# files}}.`
+/// (clasp clone-script.ts:132, create-script.ts:183).
+pub fn cloned_files(count: usize) -> String {
+    match count {
+        0 => "Cloned no files.".to_string(),
+        1 => "Cloned one file.".to_string(),
+        other => format!("Cloned {} files.", icu_number(other as i64)),
+    }
+}
+
+/// `Created version {version, number}` (clasp create-version.ts:64).
+pub fn created_version(version_number: i32) -> String {
+    format!("Created version {}", icu_number(version_number as i64))
+}
+
+/// `{version, number} - {description, select, undefined {No description}
+/// other {{description}}}` (clasp list-versions.ts:72).
+pub fn version_line(version_number: i32, description: Option<&str>) -> String {
+    let description = description.unwrap_or("No description");
+    format!("{} - {description}", icu_number(version_number as i64))
+}
+
+/// `Deployed {deploymentId} {version, select, undefined {@HEAD}
+/// other {@{version}}}` (clasp create-deployment.ts:62).
+pub fn deployed(deployment_id: &str, version_number: Option<i32>) -> String {
+    let version = version_number.map_or_else(|| "@HEAD".to_string(), |n| format!("@{n}"));
+    format!("Deployed {deployment_id} {version}")
+}
+
+/// `Redeployed {deploymentId} {version, select, undefined {@HEAD}
+/// other {@{version}}}` (clasp update-deployment.ts:69).
+pub fn redeployed(deployment_id: &str, version_number: Option<i32>) -> String {
+    let version = version_number.map_or_else(|| "@HEAD".to_string(), |n| format!("@{n}"));
+    format!("Redeployed {deployment_id} {version}")
+}
+
+/// `Deleted deployment {id}` (clasp delete-deployment.ts:51).
+pub fn deleted_deployment(deployment_id: &str) -> String {
+    format!("Deleted deployment {deployment_id}")
+}
+
+/// `Deleted all deployments.` (clasp delete-deployment.ts:84).
+pub const DELETED_ALL_DEPLOYMENTS: &str = "Deleted all deployments.";
+
+/// `Deleted script {scriptId}` (clasp delete-script.ts:61).
+pub fn deleted_script(script_id: &str) -> String {
+    format!("Deleted script {script_id}")
+}
+
+/// `Created new document: {parentUrl}{br}Created new script: {scriptUrl}`
+/// (clasp create-script.ts:107, container branch).
+pub fn created_container_script(parent_url: &str, script_url: &str) -> String {
+    format!("Created new document: {parent_url}\nCreated new script: {script_url}")
+}
+
+/// `Created new script: {scriptUrl}{parentId, select, undefined {}
+/// other {{br}Bound to document: {parentUrl}}}` (clasp
+/// create-script.ts:130-133, standalone branch).
+pub fn created_standalone_script(script_url: &str, parent_id: Option<&str>) -> String {
+    match parent_id {
+        Some(parent_id) => format!(
+            "Created new script: {script_url}\nBound to document: \
+             https://drive.google.com/open?id={parent_id}"
+        ),
+        None => format!("Created new script: {script_url}"),
+    }
+}
