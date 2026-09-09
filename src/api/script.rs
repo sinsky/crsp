@@ -225,12 +225,16 @@ pub struct DeploymentsPage {
     pub next_page_token: Option<String>,
 }
 
-/// POST `…/v1/scripts/{scriptId}/run` body (clasp `runFunction`).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// POST `…/v1/scripts/{scriptId}/run` body (clasp `runFunction`). The
+/// `function` key is dropped when the name is missing (JSON.stringify drops
+/// `undefined`), and `parameters` forwards the parsed `-p` value verbatim
+/// (clasp's `parameters ?? []` never validates the top-level type).
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
-    pub function: String,
-    pub parameters: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    pub parameters: Value,
     pub dev_mode: bool,
 }
 
@@ -532,11 +536,13 @@ impl ScriptApi<'_> {
 
     /// POST `{script}/v1/scripts/{scriptId}/run` (clasp `runFunction`); the
     /// response is genuinely dynamic, so it is returned as raw JSON.
+    /// `parameters` is the parsed `--params` value (clasp `parameters ?? []`
+    /// forwards non-array values without client-side validation).
     pub async fn run(
         &self,
         script_id: &str,
-        function: &str,
-        parameters: Vec<Value>,
+        function: Option<&str>,
+        parameters: Value,
         dev_mode: bool,
     ) -> Result<Value, CrspError> {
         let url = service_url(
@@ -544,7 +550,7 @@ impl ScriptApi<'_> {
             &format!("/v1/scripts/{script_id}/run"),
         );
         let body = RunRequest {
-            function: function.to_string(),
+            function: function.map(str::to_string),
             parameters,
             dev_mode,
         };

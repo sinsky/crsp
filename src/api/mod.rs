@@ -25,7 +25,7 @@ pub use crate::api::client::{
 pub use crate::api::discovery::{DiscoveryApi, DiscoveryApis};
 pub use crate::api::drive::DriveFile;
 pub use crate::api::error::ApiErrorKind;
-pub use crate::api::logging::{LogEntry, LogResource};
+pub use crate::api::logging::LogEntry;
 pub use crate::api::oauth2::UserInfo;
 pub use crate::api::script::{
     Deployment, DeploymentConfig, DeploymentConfigInput, EntryPoint, PushFile, ScriptContent,

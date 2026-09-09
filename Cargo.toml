@@ -38,7 +38,7 @@ sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 regex = "1"
-time = "0.3"
+time = { version = "0.3", features = ["formatting", "parsing", "local-offset"] }
 thiserror = "2"
 # O_NOFOLLOW constant for the POSIX credential-file direct write (spec §2.3).
 libc = "0.2"

@@ -12,7 +12,9 @@ use crate::core::config::ProjectConfig;
 use crate::core::files::{LocalExtensions, PullFile, SkipReason, pull_files};
 use crate::core::project::{PULL_WRITE_LIMIT, fetch_remote_files};
 use crate::error::CrspError;
+use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, PromptInput, Ui};
 
 pub fn parse_version(value: Option<&str>) -> Result<Option<i32>, CrspError> {
     value
@@ -207,4 +209,110 @@ pub fn print_deployment_result(
         output.message(&message);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Open commands, project-id prompts (clasp commands/utils.ts + experiments.ts)
+// ---------------------------------------------------------------------------
+
+/// Browser launcher (clasp's `open` import), injectable so tests can record
+/// or fail launches without spawning a process.
+pub trait UrlOpener {
+    /// Launches `url` in the default browser (clasp `open(url,
+    /// {wait: false})`); a spawn failure propagates as an error (exit 1).
+    fn open(&self, url: &str) -> Result<(), CrspError>;
+}
+
+/// The production launcher over the `open` crate (open =5, spec §3.1).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemOpener;
+
+impl UrlOpener for SystemOpener {
+    fn open(&self, url: &str) -> Result<(), CrspError> {
+        open::that(url).map(|_| ())?;
+        Ok(())
+    }
+}
+
+/// clasp `INCLUDE_USER_HINT_IN_URL` (experiments.ts): `CLASP_ENABLE_USER_HINTS`
+/// is truthy when it is `'true'` (case-insensitive) or `'1'`; unset or any
+/// other value is falsy.
+pub fn include_user_hint_in_url() -> bool {
+    match std::env::var("CLASP_ENABLE_USER_HINTS") {
+        Ok(value) => value.eq_ignore_ascii_case("true") || value == "1",
+        Err(_) => false,
+    }
+}
+
+/// clasp `Clasp.authorizedUser` (core/clasp.ts:90-101): the userinfo id, or
+/// an empty string on any failure (the caller sets `authUser=<empty>`).
+pub async fn authorized_user_hint(client: &ApiClient) -> String {
+    match client.oauth2().userinfo().await {
+        Ok(user) => user.id.unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+/// clasp `openUrl` (commands/utils.ts:180-202): without a browser (stdout is
+/// not a TTY) the manual-open message is printed and nothing is launched
+/// (exit 0); otherwise the opening message is printed before the launch and
+/// a launch failure propagates (exit 1).
+pub fn open_url<A: PromptAdapter, O: UrlOpener>(
+    ui: &Ui<A>,
+    opener: &O,
+    url: &str,
+    output: &mut Output<impl Write, impl Write>,
+) -> Result<(), CrspError> {
+    if !ui.is_interactive() {
+        output.message(&i18n::open_in_browser(url));
+        return Ok(());
+    }
+    output.message(&i18n::opening_in_browser(url));
+    opener.open(url)
+}
+
+/// clasp commands-level `assertGcpProjectConfigured`: the project ID must be
+/// set (truthy), with no script-ID check.
+pub fn assert_gcp_project_configured(config: &ProjectConfig) -> Result<&str, CrspError> {
+    config
+        .project_id
+        .as_deref()
+        .filter(|project_id| !project_id.is_empty())
+        .ok_or(CrspError::Validation(
+            i18n::GCP_PROJECT_ID_NOT_SET.to_string(),
+        ))
+}
+
+/// clasp `maybePromptForProjectId` (commands/utils.ts:80-113): when the
+/// project ID is unset and the session is interactive, print instructions,
+/// open the script settings page, prompt for the project ID, and persist it
+/// via `updateSettings`. Returns the configured project ID otherwise.
+pub async fn maybe_prompt_for_project_id<A: PromptAdapter, O: UrlOpener>(
+    config: &mut ProjectConfig,
+    ui: &Ui<A>,
+    opener: &O,
+    output: &mut Output<impl Write, impl Write>,
+) -> Result<Option<String>, CrspError> {
+    if config
+        .project_id
+        .as_deref()
+        .is_some_and(|project_id| !project_id.is_empty())
+        || !ui.is_interactive()
+    {
+        return Ok(config.project_id.clone());
+    }
+    let script_id = config.script_id.as_deref().ok_or(CrspError::Validation(
+        i18n::SCRIPT_ID_NOT_SET_CONTINUE.to_string(),
+    ))?;
+    let url = format!("https://script.google.com/home/projects/{script_id}/settings");
+    output.message(&i18n::gcp_project_instructions(&url));
+    open_url(ui, opener, &url, output)?;
+    let project_id = ui.input(PromptInput {
+        prompt: i18n::WHAT_IS_YOUR_GCP_PROJECT_ID.to_string(),
+        placeholder: None,
+        default: None,
+    })?;
+    config.project_id = Some(project_id);
+    config.update_settings().await?;
+    Ok(config.project_id.clone())
 }

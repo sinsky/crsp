@@ -360,3 +360,134 @@ pub fn created_standalone_script(script_url: &str, parent_id: Option<&str>) -> S
         None => format!("Created new script: {script_url}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Run, API management, logs, and open commands (spec §2.5 rows 16-28;
+// clasp commands/run-function.ts, list-apis.ts, enable-api.ts, disable-api.ts,
+// tail-logs.ts, setup-logs.ts, open-*.ts, commands/utils.ts, core/services.ts,
+// core/logs.ts, core/functions.ts)
+// ---------------------------------------------------------------------------
+
+/// `Script ID is not set, unable to continue.` (clasp commands-level
+/// `assertScriptConfigured`, commands/utils.ts:45-54).
+pub const SCRIPT_ID_NOT_SET_CONTINUE: &str = "Script ID is not set, unable to continue.";
+
+/// `GCP project ID is not set, unable to continue.` (clasp commands-level
+/// `assertGcpProjectConfigured`, commands/utils.ts:62-71).
+pub const GCP_PROJECT_ID_NOT_SET: &str = "GCP project ID is not set, unable to continue.";
+
+/// `Project ID not found.` (clasp core-level `assertGcpProjectConfigured`).
+pub const PROJECT_ID_NOT_FOUND: &str = "Project ID not found.";
+
+/// `The script is not bound to a GCP project. …` instructions printed before
+/// opening the script settings page (clasp maybePromptForProjectId,
+/// commands/utils.ts:86-95; the newlines and indentation are literal).
+pub fn gcp_project_instructions(url: &str) -> String {
+    format!(
+        "The script is not bound to a GCP project. To view or configure the GCP project for this\n      \
+         script, open {url} in your browser and follow instructions for setting up a GCP project. \
+         If a project is already\n      configured, open the GCP project to get the project ID value."
+    )
+}
+
+/// `What is your GCP projectId?` (clasp maybePromptForProjectId prompt).
+pub const WHAT_IS_YOUR_GCP_PROJECT_ID: &str = "What is your GCP projectId?";
+
+/// `Open {url} in your browser to continue.` (clasp `openUrl` without a
+/// browser, commands/utils.ts:182-189).
+pub fn open_in_browser(url: &str) -> String {
+    format!("Open {url} in your browser to continue.")
+}
+
+/// `Opening {url} in your browser.` (clasp `openUrl` with a browser,
+/// commands/utils.ts:193-200).
+pub fn opening_in_browser(url: &str) -> String {
+    format!("Opening {url} in your browser.")
+}
+
+/// `Running function: {functionName}` (clasp run-function spinner message).
+pub fn running_function(function_name: &str) -> String {
+    format!("Running function: {function_name}")
+}
+
+/// `Selection a function name` (clasp run-function.ts:57-59; the grammar is
+/// clasp's).
+pub const SELECT_A_FUNCTION_NAME: &str = "Selection a function name";
+
+/// `Exception:` (clasp run-function.ts:92-94, stderr).
+pub const RUN_EXCEPTION: &str = "Exception:";
+
+/// `No response.` (clasp run-function.ts:104-106).
+pub const RUN_NO_RESPONSE: &str = "No response.";
+
+/// `Function returned undefined` (clasp core/functions.ts:251).
+pub const FUNCTION_RETURNED_UNDEFINED: &str = "Function returned undefined";
+
+/// NOT_AUTHORIZED run notice (clasp run-function.ts:113-116).
+pub const RUN_FUNCTION_NOT_AUTHORIZED: &str = "Unable to run script function. Please make sure you have permission to run the script function.";
+
+/// NOT_FOUND run message (clasp run-function.ts:121-124).
+pub const RUN_FUNCTION_NOT_FOUND: &str =
+    "Script function not found. Please make sure script is deployed as API executable.";
+
+/// `Fetching APIs...` (clasp list-apis.ts spinner message).
+pub const FETCHING_APIS: &str = "Fetching APIs...";
+
+/// `# Currently enabled APIs:` (clasp list-apis.ts:50-52).
+pub const ENABLED_APIS_LABEL: &str = "# Currently enabled APIs:";
+
+/// `# List of available APIs:` (clasp list-apis.ts:58-60).
+pub const AVAILABLE_APIS_LABEL: &str = "# List of available APIs:";
+
+/// `Enabling service...` (clasp enable-api.ts spinner message).
+pub const ENABLING_SERVICE: &str = "Enabling service...";
+
+/// `Disabling service...` (clasp disable-api.ts spinner message).
+pub const DISABLING_SERVICE: &str = "Disabling service...";
+
+/// `Not authorized to enable {name} or it does not exist.` (clasp
+/// enable-api.ts:43-50).
+pub fn not_authorized_to_enable(name: &str) -> String {
+    format!("Not authorized to enable {name} or it does not exist.")
+}
+
+/// `Enabled {name} API.` (clasp enable-api.ts:61-68).
+pub fn enabled_api(name: &str) -> String {
+    format!("Enabled {name} API.")
+}
+
+/// `Disabled {name} API.` (clasp disable-api.ts:47-54).
+pub fn disabled_api(name: &str) -> String {
+    format!("Disabled {name} API.")
+}
+
+/// `Manifest file does not exist.` (clasp core/services.ts:145).
+pub const MANIFEST_FILE_DOES_NOT_EXIST: &str = "Manifest file does not exist.";
+
+/// `Service is not a valid advanced service.` (clasp core/services.ts:156).
+pub const SERVICE_NOT_A_VALID_ADVANCED_SERVICE: &str = "Service is not a valid advanced service.";
+
+/// `Fetching logs...` (clasp tail-logs.ts spinner message, every poll).
+pub const FETCHING_LOGS: &str = "Fetching logs...";
+
+/// `Script logs are now available in Cloud Logging.` (clasp
+/// setup-logs.ts:41-43).
+pub const SETUP_LOGS_SUCCESS: &str = "Script logs are now available in Cloud Logging.";
+
+/// `Script ID not set, unable to open IDE.` (clasp open-script.ts).
+pub const OPEN_IDE_SCRIPT_ID_NOT_SET: &str = "Script ID not set, unable to open IDE.";
+
+/// `Parent ID not set, unable to open document.` (clasp open-container.ts).
+pub const PARENT_ID_NOT_SET_UNABLE_TO_OPEN: &str = "Parent ID not set, unable to open document.";
+
+/// `Script ID not set, unable to open web app.` (clasp open-webapp.ts).
+pub const OPEN_WEB_APP_SCRIPT_ID_NOT_SET: &str = "Script ID not set, unable to open web app.";
+
+/// `Deployment ID is required.` (clasp open-webapp.ts noninteractive path).
+pub const DEPLOYMENT_ID_REQUIRED: &str = "Deployment ID is required.";
+
+/// `No web app entry point found.` (clasp open-webapp.ts).
+pub const NO_WEB_APP_ENTRY_POINT: &str = "No web app entry point found.";
+
+/// `Open which deployment?` (clasp open-webapp.ts prompt).
+pub const OPEN_WHICH_DEPLOYMENT: &str = "Open which deployment?";

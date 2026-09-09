@@ -3,6 +3,7 @@
 //! (`appsscript.json`), ignore matching (`.claspignore`), path jail
 //! validation, and generic pagination.
 
+pub mod apis;
 pub mod config;
 pub mod files;
 pub mod ignore;
@@ -10,3 +11,4 @@ pub mod manifest;
 pub mod pagination;
 pub mod path;
 pub mod project;
+pub mod services;

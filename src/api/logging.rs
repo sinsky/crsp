@@ -1,12 +1,12 @@
 //! Cloud Logging endpoint (spec §2.2; clasp `core/logs.ts` `getLogEntries`).
 //!
 //! The request is a JSON POST with the page size and token inside the body;
-//! entries keep the full server shape (known envelope fields typed, the rest
-//! preserved through `extra`) because tail-logs `--json` re-serializes whole
-//! entries.
+//! entries keep the full server shape as an ordered document because
+//! tail-logs `--json` re-serializes whole entries (`JSON.stringify(entry,
+//! null, 2)`) with the original key order (spec §6.2 tail-logs row).
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::api::client::{ApiClient, service_url};
 use crate::api::error::parse_error;
@@ -27,41 +27,59 @@ pub struct ListEntriesRequest {
     pub page_token: Option<String>,
 }
 
-/// A Cloud Logging entry. Known clasp-consumed fields are typed; unknown
-/// fields are preserved for `--json` re-serialization (ordered maps).
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// A Cloud Logging entry: the raw ordered document (field order preserved
+/// for `--json` re-serialization) plus typed accessors for the fields clasp
+/// consumes.
+#[derive(Debug, Clone, Default)]
 pub struct LogEntry {
-    #[serde(default)]
-    pub timestamp: Option<String>,
-    #[serde(default, rename = "insertId")]
-    pub insert_id: Option<String>,
-    #[serde(default)]
-    pub severity: Option<String>,
-    #[serde(default, rename = "textPayload")]
-    pub text_payload: Option<String>,
-    #[serde(default, rename = "jsonPayload")]
-    pub json_payload: Option<Value>,
-    #[serde(default)]
-    pub resource: Option<LogResource>,
-    /// Every other field of the entry, order-preserved.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    raw: Value,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct LogResource {
-    #[serde(default)]
-    pub labels: Option<Map<String, Value>>,
+impl<'de> Deserialize<'de> for LogEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(|raw| Self { raw })
+    }
 }
 
 impl LogEntry {
-    /// Function name label (clasp `resource.labels?.['function_name'] ?? 'N/A'`).
-    pub fn function_name(&self) -> Option<&str> {
-        self.resource
-            .as_ref()
-            .and_then(|resource| resource.labels.as_ref())
+    /// The raw entry document, in server key order.
+    pub fn raw(&self) -> &Value {
+        &self.raw
+    }
+
+    /// clasp `entry.timestamp`.
+    pub fn timestamp(&self) -> Option<&str> {
+        self.raw.get("timestamp").and_then(Value::as_str)
+    }
+
+    /// clasp `entry.insertId`.
+    pub fn insert_id(&self) -> Option<&str> {
+        self.raw.get("insertId").and_then(Value::as_str)
+    }
+
+    /// clasp `entry.severity`.
+    pub fn severity(&self) -> Option<&str> {
+        self.raw.get("severity").and_then(Value::as_str)
+    }
+
+    /// clasp `entry.textPayload`.
+    pub fn text_payload(&self) -> Option<&str> {
+        self.raw.get("textPayload").and_then(Value::as_str)
+    }
+
+    /// clasp `entry.jsonPayload`.
+    pub fn json_payload(&self) -> Option<&Value> {
+        self.raw.get("jsonPayload")
+    }
+
+    /// clasp `resource.labels?.['function_name']`.
+    pub fn function_name_label(&self) -> Option<&str> {
+        self.raw
+            .get("resource")
+            .and_then(|resource| resource.get("labels"))
             .and_then(|labels| labels.get("function_name"))
             .and_then(Value::as_str)
     }

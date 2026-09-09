@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crsp::api::{ApiClient, ApiClientConfig, ApiErrorKind, ApiRequest, BaseUrls, PagedResults};
 use crsp::auth::oauth_client::OAuthClient;
@@ -576,7 +576,7 @@ async fn run_posts_function_parameters_and_devmode() {
     let dev = h
         .client
         .script()
-        .run("s1", "myFunc", vec![json!(1), json!("a")], true)
+        .run("s1", Some("myFunc"), json!([1, "a"]), true)
         .await
         .expect("run succeeds");
     assert_eq!(dev, json!({"response": {"result": 42}, "done": true}));
@@ -584,7 +584,7 @@ async fn run_posts_function_parameters_and_devmode() {
     let nondev = h
         .client
         .script()
-        .run("s1", "myFunc", Vec::new(), false)
+        .run("s1", Some("myFunc"), json!([]), false)
         .await
         .expect("non-dev run succeeds");
     assert_eq!(nondev, json!({"done": true}));
@@ -889,15 +889,13 @@ async fn list_entries_posts_body_and_paginates_page_token_in_body() {
         .expect("list entries succeeds");
     assert!(!partial_results);
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].insert_id.as_deref(), Some("i1"));
-    assert_eq!(results[0].text_payload.as_deref(), Some("hi"));
-    let function_name = results[1]
-        .resource
-        .as_ref()
-        .and_then(|resource| resource.labels.as_ref())
-        .and_then(|labels| labels.get("function_name"))
-        .and_then(Value::as_str);
-    assert_eq!(function_name, Some("myFunc"));
+    assert_eq!(results[0].insert_id(), Some("i1"));
+    assert_eq!(results[0].text_payload(), Some("hi"));
+    assert_eq!(results[1].function_name_label(), Some("myFunc"));
+    // The raw entry keeps the server key order for --json re-serialization.
+    let raw = results[0].raw().as_object().unwrap();
+    let keys: Vec<&String> = raw.keys().collect();
+    assert_eq!(keys, ["insertId", "severity", "timestamp", "textPayload"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,7 +1036,7 @@ async fn status_400_maps_to_invalid_argument() {
     let error = h
         .client
         .script()
-        .run("s1", "f", Vec::new(), true)
+        .run("s1", Some("f"), json!([]), true)
         .await
         .expect_err("400 fails");
     assert_api_error(&error, ApiErrorKind::InvalidArgument, "m1\nm2");
@@ -1119,7 +1117,7 @@ async fn status_500_maps_to_unexpected_api_error() {
     let error = h
         .client
         .script()
-        .run("s1", "f", Vec::new(), true)
+        .run("s1", Some("f"), json!([]), true)
         .await
         .expect_err("500 fails");
     assert_api_error(&error, ApiErrorKind::UnexpectedApiError, "Backend error");
@@ -1139,7 +1137,7 @@ async fn error_message_uses_string_error() {
     let error = h
         .client
         .script()
-        .run("s1", "f", Vec::new(), true)
+        .run("s1", Some("f"), json!([]), true)
         .await
         .expect_err("502 fails");
     assert_api_error(&error, ApiErrorKind::UnexpectedApiError, "generic");
@@ -1162,7 +1160,7 @@ async fn error_message_uses_raw_body_when_not_json() {
     let error = h
         .client
         .script()
-        .run("s1", "f", Vec::new(), true)
+        .run("s1", Some("f"), json!([]), true)
         .await
         .expect_err("500 fails");
     assert_api_error(&error, ApiErrorKind::UnexpectedApiError, "backend exploded");
@@ -1181,7 +1179,7 @@ async fn error_message_defaults_when_body_empty() {
     let error = h
         .client
         .script()
-        .run("s1", "f", Vec::new(), true)
+        .run("s1", Some("f"), json!([]), true)
         .await
         .expect_err("503 fails");
     assert_api_error(
