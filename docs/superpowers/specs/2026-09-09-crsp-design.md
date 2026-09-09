@@ -1,6 +1,6 @@
 # crsp 設計仕様 — clasp (Google Apps Script CLI) の Rust 再実装
 
-- 日付: 2026-09-09 (rev2 — 外部レビュー反映)
+- 日付: 2026-09-09 (rev5 — 第3回レビュー反映)
 - 状態: ユーザーレビュー待ち (承認後 writing-plans へ移行)
 - 参照実装: `/Users/sin/Desktop/GitHub/manage-clasp/clasp` (@google/clasp v3.4.1, Apache-2.0)
 - 対象: `/Users/sin/Desktop/GitHub/manage-clasp/crsp`
@@ -13,7 +13,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 
 | 項目 | 決定 |
 |---|---|
-| 再現範囲 | 全29コマンド + MCPサーバー (フルパリティ) |
+| 再現範囲 | 全29コマンド (**`start-mcp-server` 含む**。うち28がCLI操作、1がMCPサーバー起動) |
 | ローカルファイル互換 | `.clasp.json` / `.clasprc.json` / `appsscript.json` は clasp と完全互換 (読み書き) |
 | CLI UX | コマンド名 / エイリアス / フラグ / 既定値 / 出力文言 (英語) を clasp と同一にする drop-in 互換 |
 | アーキテクチャ | シングルクレート + tokio async + Google API 薄クライアント自作 |
@@ -33,7 +33,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 ### 1.3 非スコープ
 
 - i18n (claspは英語ロケールのみ使用 → crsp も英語ハードコード)
-- clasp の `CLASP_ENABLE_USER_HINTS` 以外の実験的フラグ
+- clasp の `CLASP_ENABLE_USER_HINTS` 実験フラグ (**open系URLへの `authUser` 付与**) はスコープに含める。それ以外のexperimentsフラグは実装しない。
 - Node版 clasp とのソース共有
 
 ## 2. 参照実装から得た再現要件 (clasp v3.4.1 の分析結果・実コード検証済み)
@@ -75,12 +75,14 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - パースは **JSON5** (コメント・シングルクォート許容)。書き込みはプレーン JSON 2スペース。
 - キー: `scriptId`, `projectId`, `parentId` (配列なら先頭), `srcDir`|`rootDir` → contentDir (プロジェクトルート外はエラー), `filePushOrder`, `fileExtension`(レガシー), `scriptExtensions` (既定 `[".js",".gs"]`), `htmlExtensions` (既定 `[".html"]`), `jsonExtensions` (既定 `[".json"]`), `skipSubdirectories`, `allowSymlinks`。
 - **空文字列のedge**: `srcDir`/`rootDir` が空文字列 `""` の場合は未設定扱い (falsy) → contentDir = プロジェクトルート (`clasp.ts:208` の `config.srcDir || config.rootDir || '.'` 互換)。
-- `updateSettings` (clone/create/MCP create/clone 時の書き込み) は `scriptId`, `rootDir` (=srcDir, 常に書く), `parentId`, `projectId`, `scriptExtensions`, `htmlExtensions`, `jsonExtensions`, `filePushOrder: []` (常に空配列リセット), `skipSubdirectories` を対象とする。**値が `undefined` のキーは省略される** (`JSON.stringify` 挙動、`project.ts:447-459`) — 実質: `parentId`/`projectId` は未設定時キーごと欠落、それ以外は常に出力。
+- `updateSettings` (clone/create/MCP create/clone 時の書き込み) は `scriptId`, `rootDir`, `parentId`, `projectId`, `scriptExtensions`, `htmlExtensions`, `jsonExtensions`, `filePushOrder: []` (常に空配列リセット), `skipSubdirectories` を対象とする。**値が `undefined` のキーは省略される** (`JSON.stringify` 挙動、`project.ts:447-459`) — 実質: `parentId`/`projectId` は未設定時キーごと欠落、それ以外は常に出力。
+  - **`rootDir` の値**: 設定値 `srcDir` をそのまま書くのではなく、**`path.relative(projectRootDir, contentDir)` の再計算結果** を書く (`project.ts:447`)。`srcDir="src"` なら `rootDir: "src"` になるが、これはcontentDirからの逆算値。
 
 **`.claspignore`**
 - プロジェクトルート (または `-I`)。BOM除去→行分割。
 - 評価は `micromatch.not(files, patterns, {dot: true})` — **この戻り値が「追跡対象ファイル」** (実測確認済み: `files.ts:129`)。意味論: `match = (いずれかの肯定パターンに一致) かつ (いずれの否定 `!` パターンにも一致しない)`、**tracked = 全ファイル集合から match集合を差し引いた補集合**。
   - 実測例: files=`{a.js, x.txt, appsscript.json, .git/config.js, node_modules/f.js, sub/Code.gs}`, patterns=既定 → `match = {x.txt, .git/config.js, node_modules/f.js}` (無視対象), **`not = {a.js, appsscript.json, sub/Code.gs}` (追跡対象)**。
+  - **`.ts` の扱い**: 既定ignoreは `!**/*.ts` で追跡対象に含むが、既定 `scriptExtensions` に `.ts` は無いため `getFileType` が `undefined` を返し **push時に `unsupported_type` としてskip** される (`files.ts:397-403`)。crspも同一挙動。
   - crsp は同一アルゴリズム (match計算→補集合) を `ignore.rs` に実装する。
 - 既定値 (不在時): `**/**`, `!**/appsscript.json`, `!**/*.gs`, `!**/*.js`, `!**/*.ts`, `!**/*.html`, `.git/**`, `node_modules/**`。
 
@@ -93,8 +95,9 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - デフォルト OAuth クライアント (claspと同一、既存トークン互換):
   - ID: `1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com`
   - Secret: `v6V3fKV_zWU7iw1DrpO1rknX` (公開前提のGoogle提供デスクトップクライアント)
-  - redirect: `http://localhost`
+  - **クライアント登録上のredirect**: `http://localhost` (Googleのデスクトップアプリ規約 — 実行時redirect URIとは別物、下記参照)
   - クライアント分類: ID一致 → `google-provided`、それ以外 → `user-provided`
+- **実行時redirect URI**: localhost flow は `http://localhost:<port>` (ランダムまたは `--redirect-port`)、serverless flow は `http://localhost:8888`。Google OAuthはlocalhostへの任意ポートを許可するため登録値 `http://localhost` で動作する。
 
 **`appsscript.json`** — contentDir に置かれるマニフェスト。push/pull では `type: JSON`・リモート名 `appsscript`。enable/disable-api は `dependencies.enabledAdvancedServices` (`userSymbol`, `serviceId`, `version`) を読み書き (キー順保持)。
 
@@ -128,19 +131,19 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 | 1 | `login` | — | なし | `--no-localhost`, `--creds <f>`, `--use-project-scopes`, `--include-clasp-scopes`, `--extra-scopes <s>`, `--redirect-port <n>` | OAuth認証して `.clasprc.json` 保存 |
 | 2 | `logout` | — | なし | なし | 現ユーザーkeyのトークン削除 (`default` のみV1掃除)。未ログインでも成功 |
 | 3 | `show-authorized-user` | — | なし | なし | ログイン状態・email・client ID・種別表示 |
-| 4 | `clone-script` | `clone` | `[scriptId] [versionNumber]` | `--rootDir <dir>` | URLからID抽出 (`https://script.google.com/d/([^/]+)/`)。対話: Drive一覧選択。pull後 `.clasp.json` 作成 |
-| 5 | `create-script` | `create` | なし | `--type <t>` (既定 `standalone`), `--title <t>` (既定: cwd名humanize), `--parentId <id>`, `--rootDir <dir>` | container型 (docs/forms/sheets/slides) はDrive作成→bound script。webapp/api はdeployment tip表示 |
+| 4 | `clone-script` | `clone` | `[scriptId] [versionNumber]` | `--rootDir <dir>` | URLからID抽出 (正規表現 `https:\/\/script\.google\.com\/d\/([^/]+)\/.*`, 非一致はtrimしてID扱い)。`versionNumber` 未指定時はHEAD。対話: Drive一覧選択。pull後 `.clasp.json` 作成 |
+| 5 | `create-script` | `create` | なし | `--type <t>` (有効値: `standalone|webapp|api` (standalone系), `docs|forms|sheets|slides` (container), 既定 `standalone`, 小文字正規化), `--title <t>` (既定: cwd名humanize), `--parentId <id>`, `--rootDir <dir>` | container型はMIME (`docs→document, forms→form, sheets→spreadsheet, slides→presentation`) でDrive作成→bound script。`webapp`/`api` は作成後にdeployment tip表示 (マニフェスト `webApp`/`executionApi` フィールド案内)。未知typeはエラーで有効値一覧表示 |
 | 6 | `push` | — | なし | `-f/--force`, `-w/--watch` | 差分なし→`Script is already up to date.`、あり→全ファイル含むフル置換PUT。マニフェスト変更時confirm (非interactive=拒否)。watchは500ms debounce |
-| 7 | `pull` | — | なし | `--versionNumber <n>`, `-d/--deleteUnusedFiles`, `-f/--force` | content取得→直接書き込み (§2.6)。`-d` は対話確認後削除 |
+| 7 | `pull` | — | なし | `--versionNumber <n>`, `-d/--deleteUnusedFiles`, `-f/--force` | content取得→直接書き込み (§2.6)。`--versionNumber` と `-d` は併用可 (指定versionのcontentとローカルを突き合わせて削除判断)。`-d` は対話確認後削除 |
 | 8 | `create-deployment` | `deploy` | なし | `-V/--versionNumber`, `-d/--description`, `-i/--deploymentId` | version未指定なら暗黙作成。`-i` 指定なら更新 |
 | 9 | `update-deployment` | `redeploy` | `<deploymentId>` (必須) | `-V`, `-d`, `--json` (ローカル定義・グローバルと同義) | 既存deployment更新 |
-| 10 | `delete-deployment` | `undeploy` | `[deploymentId]` | `-a/--all` | versionedのみ対象。1件自動選択、複数は対話 |
+| 10 | `delete-deployment` | `undeploy` | `[deploymentId]` | `-a/--all` | **versioned判定は `deploymentConfig?.versionNumber !== undefined`** (`delete-deployment.ts:68,93`)。1件自動選択、複数は対話 |
 | 11 | `delete-script` | `delete` | `[scriptId]` | `-f/--force` | Drive trash。confirm必須 (非interactive+`-f`なし=サイレントno-op) |
 | 12 | `create-version` | `version` | `[description]` | なし | version作成 (対話入力フォールバック) |
 | 13 | `list-versions` | `versions` | `[scriptId]` | なし | 逆順リスト `N - desc` |
 | 14 | `list-deployments` | `deployments` | `[scriptId]` | なし | `- {id} @{v|HEAD} {- desc}` |
 | 15 | `list-scripts` | `list` | なし | `--noShorten` | Driveスクリプト一覧 (既定20文字truncate) |
-| 16 | `run-function` | `run` | `[functionName]` | `--nondev`, `-p/--params <json>` | `scripts/{id}/run`。devMode既定true。関数名省略時fuzzy選択。`NOT_AUTHORIZED`→API実行可能deploy注意喚起、`NOT_FOUND`→関数不在メッセージ |
+| 16 | `run-function` | `run` | `[functionName]` | `--nondev`, `-p/--params <json>` | `scripts/{id}/run`。devMode既定true。関数名省略時fuzzy選択。`-p` はJSON配列として `JSON.parse` (失敗時はSyntaxErrorが伝播し exit 1)。`NOT_AUTHORIZED`→API実行可能deploy注意喚起、`NOT_FOUND`→関数不在メッセージ |
 | 17 | `tail-logs` | `logs` | なし | `--watch`, `--simplified` | Cloud Logging取得。insertId重複排除。watchは6000msポーリング |
 | 18 | `setup-logs` | — | なし | なし | projectId確認・対話設定のみ (API呼び出しなし) |
 | 19 | `show-file-status` | `status` | なし | なし | push対象/未追跡ファイル一覧 (未追跡は共通親ディレクトリに圧縮) |
@@ -149,7 +152,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 | 22 | `disable-api` | — | `<api>` | なし | マニフェスト更新 + Service Usage無効化 |
 | 23 | `open-script` | — | `[scriptId]` | なし | `https://script.google.com/d/{id}/edit` |
 | 24 | `open-container` | — | なし | なし | `parentId` 必須 → `https://drive.google.com/open?id={id}` |
-| 25 | `open-web-app` | — | `[deploymentId]` | なし | deployments から WEB_APP entry point のURL取得 |
+| 25 | `open-web-app` | — | `[deploymentId]` | なし | deployments列挙 (対話時, `updateTime`降順) → 選択または引数のdeploymentIdで `GET deployments/{id}` → `entryPoints` から `WEB_APP` を探し `webApp.url` を開く。WEB_APP不在時エラー |
 | 26 | `open-logs` | — | なし | なし | Cloud Console logs viewer |
 | 27 | `open-api-console` | — | なし | なし | GCP APIs dashboard |
 | 28 | `open-credentials-setup` | — | なし | なし | GCP credentials ページ |
@@ -167,7 +170,10 @@ open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` �
 - **`allowSymlinks=true`**: symlink を **follow する** (`crawlLogicalSymlinks`, `files.ts:116-117`)。書き込み側も `O_NOFOLLOW` を省略。
 - SERVER_JS名衝突: 同一basenameの `.js`/`.gs` 併存でエラー。
 - ソート: `filePushOrder` 優先 → アルファベット (`localeCompare` 相当)。
-- 差分計算: リモートHEAD (`GET content`) と比較。差分なし → PUTせず `Script is already up to date.`。あり → **全ファイルを含むフル置換PUT**。
+- **変更検出とPUT送信の分離** (`files.ts:486-498`):
+  - 変更検出 (`getChangedFiles`): ローカルファイルがリモートに無い **または** 内容が異なる → 変更あり。**リモートのみに存在するファイル (ローカルで削除済み) は検出しない**。
+  - PUT送信: 変更の有無に関係なく、**収集した全ローカルファイル** を `{files: [...]}` でフル置換PUT。
+  - `Script is already up to date.` は変更ファイル0件の時のみ (PUTしない)。
 - マニフェスト変更 & `--force` 無し → confirm (非interactive=拒否)。
 - 構文エラーパース: `Syntax error: {msg} line: {n} file: {name}` を抽出しコードスニペット表示。
 - contentDir はプロジェクトルート内に制限 (脱出禁止)。
@@ -181,7 +187,7 @@ open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` �
 - contentDir 自体: `lstat` でsymlink確認 (allowSymlinks=false時) + realpath取得 (`files.ts:679-689`)。
 - `-d/--deleteUnusedFiles`: リモートに無いローカルファイルを削除 (`-f` なしなら対話確認、非interactiveならスキップ警告)。削除対象も jail チェック。
 
-**watch (`push -w`)**: 500ms debounce、`.claspignore` フィルタ、起動時 `Waiting for changes...`、マニフェスト拒否でwatch終了。
+**watch (`push -w`)**: 500ms debounce、`.claspignore` フィルタ、起動時 `Waiting for changes...`。マニフェスト確認は **force状態がwatchループ内で維持される** (`push.ts:39`: 一度 `--force` またはconfirm承認なら以後確認なし、**confirm拒否でwatch終了**)。
 
 **並列度**: 書き込みは `pMap(files, mapper)` = **並列数無制限** (`files.ts:793`、p-mapのデフォルト)。crsp も無制限で再現 (§1.2 レイヤA: 動作互換)。
 
@@ -199,7 +205,8 @@ open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` �
 | `list_projects` | **なし (空オブジェクト `{}`)** | text: `Found N ...` + `{name} ({id})`。structured: `{scripts: [{scriptId, name}]}` |
 
 - パスjail `validateProjectDir`: resolve後、**homedir または cwd 配下のみ許可** (`Security Error: projectDir must be within the user home directory or current working directory. Resolved path "X" is not permitted.`)。
-- **`sourceDir` の参照実装における不整合** (claspの現状): ①検証は生パスを `validateProjectDir` (homedir/cwd jail) に通すだけ (`server.ts:315-321`)、②実際のcontentDir解決は `withContentDir` が **`projectRootDir` 相対** で行う (`clasp.ts:129-141`)。検証基準 (cwd) と読み書き基準 (projectDir) が一致していない。
+- **`sourceDir` の参照実装における挙動** (claspの現状): ①検証は生パスを `validateProjectDir` (homedir/cwd jail) に通すだけ (`server.ts:315-321`, `432-438`)、**`sourceDir === undefined` の場合は検証をスキップし `'.'` を渡す**、②実際のcontentDir解決は `withContentDir` が **`projectRootDir` 相対** で行う (`clasp.ts:129-141`)。検証基準 (cwd) と読み書き基準 (projectDir) が一致していない。
+  - **補足**: `withContentDir` は絶対パスにも `isInside(projectRootDir, ...)` チェックを適用する (`clasp.ts:134`) — **projectDir jailのバイパスは発生しない**。絶対パスでprojectDir外を指定した場合は withContentDir がエラーを投げる。
   - **crspの方針 (§5 #5)**: `sourceDir` は **`projectDir` 相対** で解決し、解決後のパスが **`projectDir` 配下** であることをjailとして検証する。ツール説明文もこれに一致させる。
 - ツール呼び出しごとに `Clasp` インスタンスを新規構築 (ステートレス)。
 
@@ -236,30 +243,30 @@ crsp/
 └── tests/                   # 統合テスト (§9)
 ```
 
-### 3.1 技術選定
+### 3.1 技術選定 (バージョンは Cargo.toml 作成時の基準 — 実装開始時の最新安定系に追従)
 
-| 用途 | クレート | 備考 |
-|---|---|---|
-| CLI | `clap 4` (derive) | usageエラーも exit 1 に統一 (commander互換) |
-| async | `tokio` (full) + `futures` | 並列書き込み・watch・MCP |
-| HTTP | `reqwest` + `rustls` | openssl回避の静的リンク |
-| JSON | `serde` + `serde_json` | 書き出し。`Value` でキー順保持 (`preserve_order` feature) |
-| JSON5読込 | `json5` | `.clasp.json` 読み込みのみ |
-| ignore | `globset` + 自前match→補集合 | micromatch互換 (§2.3) |
-| ファイル走査 | `walkdir` | skipSubdirectories は depth 0 |
-| watch | `notify` | FSEvents/inotify + 500ms debounce |
-| 対話UI | `dialoguer` (`fuzzy-select` feature → `fuzzy-matcher`), `indicatif` | spinner は TTY 時のみ |
-| ブラウザ | `open` | |
-| ホームディレクトリ | `home` | 公式メンテ (cargo使用) |
-| OAuth暗号 | `rand` + `sha2` + `base64` | PKCE S256, state 256bit |
-| URL/文字列処理 | `url`, `regex`, `inflector` | clone時のURL抽出、create-script既定titleのhumanize (inflection互換) |
-| 時刻 | `time` | expiry_date (epoch ms), ログISO表示 |
-| ログ | `tracing` + `tracing-subscriber` (env-filter) | claspの `Debug('clasp:*')` 相当 (`CRSP_DEBUG` または `RUST_LOG`) |
-| localhost redirect | `tiny_http` | 1ルートのみで十分 (axumより軽量) |
-| MCP | `rmcp` | stdio transport |
-| エラー | `thiserror` + `anyhow` | mainでの表示用 |
-| 表示幅 | `unicode-width` | ellipsize |
-| テスト | `wiremock`, `assert_cmd`, `predicates`, `tempfile` | §9 |
+| 用途 | クレート | バージョン目安 | 備考 |
+|---|---|---|---|
+| CLI | `clap` (derive) | `=4.5` | usageエラーも exit 1 に統一 (commander互換) |
+| async | `tokio` (full) + `futures` | `tokio = "1"` | 並列書き込み・watch・MCP |
+| HTTP | `reqwest` + `rustls` | `=0.12` | openssl回避の静的リンク |
+| JSON | `serde` + `serde_json` | `serde = "1"`, `serde_json = "1"` | 書き出し。`Value` でキー順保持 (`preserve_order` feature) |
+| JSON5読込 | `json5` | `=0.4` | `.clasp.json` 読み込みのみ |
+| ignore | `globset` + 自前match→補集合 | `=0.4` | micromatch互換 (§2.3) |
+| ファイル走査 | `walkdir` | `=2` | skipSubdirectories は depth 0 |
+| watch | `notify` | `=8` | FSEvents/inotify + 500ms debounce |
+| 対話UI | `dialoguer` (`fuzzy-select` feature), `indicatif` | `dialoguer = "0.11"`, `indicatif = "0.17"` | spinner は TTY 時のみ |
+| ブラウザ | `open` | `=5` | |
+| ホームディレクトリ | `home` | `=0.5` | 公式メンテ (cargo使用) |
+| OAuth暗号 | `rand` + `sha2` + `base64` | `rand = "0.9"`, `sha2 = "0.10"`, `base64 = "0.22"` | PKCE S256, state 256bit |
+| URL/文字列処理 | `url`, `regex`, `inflector` | `url = "2"`, `regex = "1"`, `inflector = "0.11"` | URL抽出、create-script既定titleのhumanize |
+| 時刻 | `time` | `=0.3` | expiry_date (epoch ms), ログISO表示 |
+| ログ | `tracing` + `tracing-subscriber` (env-filter) | `=0.1` | claspの `Debug('clasp:*')` 相当 (`CRSP_DEBUG` または `RUST_LOG`) |
+| localhost redirect | `tiny_http` | `=0.12` | 1ルートのみで十分 (axumより軽量) |
+| MCP | `rmcp` | 最新安定 | stdio transport |
+| エラー | `thiserror` + `anyhow` | `thiserror = "2"`, `anyhow = "1"` | mainでの表示用 |
+| 表示幅 | `unicode-width` | `=0.2` | ellipsize |
+| テスト | `wiremock`, `assert_cmd`, `predicates`, `tempfile` | 最新安定 | §9 |
 
 ### 3.2 実行フロー
 
@@ -276,13 +283,13 @@ crsp/
 
 ## 4. 重要な互換性ルール (実装時の契約)
 
-1. `.clasp.json` は JSON5 で読み、プレーン JSON (2スペース) で書く。`updateSettings` は rootDir を常に書き、`filePushOrder` を空配列にリセット。**undefined値のキーは書き込み時に省略** (parentId/projectId は未設定時欠落)。
+1. `.clasp.json` は JSON5 で読み、プレーン JSON (2スペース) で書く。`updateSettings` は `rootDir` を `path.relative(projectRoot, contentDir)` の再計算値として書き、`filePushOrder` を空配列にリセット。**undefined値のキーは書き込み時に省略** (parentId/projectId は未設定時欠落)。
 2. `.clasprc.json` は V3 形式で書き、V1 2形式は `default` ユーザーのみ読む。書き込みは0600 + O_NOFOLLOW 直接書き込み (POSIX)。Windows はベストエフォート。
 3. 既定OAuthクライアントは clasp と同一の ID/secret (既存トークンがそのまま動く)。
 4. スコープ既定10種は clasp と完全一致。
 5. ignore 評価は `micromatch.not` 互換: match (肯定∪ − 否定) の**補集合**が追跡対象。dot有効。
 6. ページネーション: 既定 pageSize=100/maxPages=10、ServiceUsageのみ pageSize=200/maxResults=10000。
-7. push は差分なし→PUTせず `Script is already up to date.`、差分あり→全ファイル含むフル置換PUT。
+7. push は変更0件→PUTせず `Script is already up to date.`、変更あり→**全ローカルファイル**を含むフル置換PUT (変更検出は表示と判断のみに使用)。
 8. pull 書き込みは直接書き込み (O_NOFOLLOW/0644、temp→renameではない) + symlink/jail 防御。
 9. 非interactive時のフォールバック: push manifest確認=拒否 / pull `-d` 削除=スキップ+警告 / delete=サイレントno-op。
 10. `--json` 出力契約は §6.2。open系はJSONモードでも `Opening {url}...` 行を表示 (clasp互換の意図的維持)。
@@ -300,7 +307,7 @@ crsp/
 | 4 | MCP `push_files` の `status: 'success'` | 非標準フィールド付与 | 廃止 (標準JSON-RPC envelopeに準拠) | structuredContent から除外 |
 | 5 | MCP `sourceDir` の解決 | 検証が生パスの homedir/cwd jail、実際の解決は projectRootDir 相対 — 2段階で基準不一致 (`server.ts:315-321` + `clasp.ts:129-141`) | **`sourceDir` を `projectDir` 相対で解決し、解決後パスが `projectDir` 配下であることを検証** (仕様・検証・実装を一致) | 絶対パス指定は同等動作。相対パス指定の挙動が変わる (projectDir基準に統一)。エラー時 exit/エラー形式は不変 |
 | 6 | tail-logs デバッグ出力 | `console.log('PAST', projectId)` を毎回出力 | 削除 | 出力1行減、exit code 不変 |
-| 7 | `status` のJSON | 単一行 | 2スペース pretty (他コマンドと統一) | JSONパース結果は同一 |
+| 7 | `status` のJSON | 単一行 (`show-file-status.ts:45-49`: `JSON.stringify(...)` 引数1つ) | 2スペース pretty (他コマンドと統一) | JSONパース結果は同一 |
 | 8 | `delete` の `--json` | 無視 | `{"success": true}` を出力 | 新規出力、exit code 不変 |
 | 9 | `pull -d` フラグ定義 | 末尾スペース付き `'-d, --deleteUnusedFiles '` | 修正 | フラグ名は同一のため動作差異なし |
 | 10 | `list_projects` の annotations | `destructiveHint: true, readOnlyHint: false` (誤り) | `destructiveHint: false, readOnlyHint: true` | 読み取り専用ツールの正しい宣言 |
@@ -341,16 +348,16 @@ crsp/
 | setup-logs | `{"success": true}` | `commands/setup-logs.ts` |
 | delete-script | **crsp追加: `{"success": true}`** (claspは出力なし — §5 #8) | `commands/delete-script.ts` |
 | open-* | `{"url": "..."}` + stdoutに行表示: ブラウザあり `Opening {url} in your browser.` / なし `Open {url} in your browser to continue.` (clasp互換維持 — `commands/utils.ts:180-202`) | `commands/open-*.ts`, `commands/utils.ts` |
-| tail-logs | **JSON payload整形行** (clasp同一): `JSON.stringify(entry, null, 2)` をpayload列に埋め込んだ `severity 時刻 関数名 payload` 行 (§純JSONではない — 完全互換を採用)。--json時はpayload不在のエントリも出力可 | `commands/tail-logs.ts:122-149` |
+| tail-logs | **JSON payload整形行** (clasp同一、`tail-logs.ts:122-149`): payload列に `JSON.stringify(entry, null, 2)` (複数行) を埋め込んだ `severity(20幅) 時刻 関数名(15幅) payload` 行 — 1行目のみprefix付きでJSONはそのまま折返し連結。**純JSONではない** (完全互換を採用)。--json時はpayload不在判定をスキップ (timestamp必須のみ) | `commands/tail-logs.ts` |
 | start-mcp-server | MCPプロトコル (CLI出力なし) | `commands/start-mcp.ts` |
 
 JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先し、quirk として保守する。
 
 ## 7. API失敗・再試行・認証同時実行契約
 
-### 7.1 再試行 (gaxios 7.3.1 デフォルト互換 — 実パッケージソースで確認済み)
+### 7.1 再試行 (検証済み: `googleapis-common 8.0.3 apirequest.js:260` で `options.retry = true` デフォルト + gaxios 7.3.1 `src/retry.js`)
 
-claspは gaxios 7.3.1 (package-lock解決済み) のデフォルトリトライ設定で動作する。crspは同一契約を再現し、§9.2 golden testで固定する:
+claspの全API呼び出しは googleapis-common 経由で **リトライデフォルトON** (`apirequest.js:260`)、gaxios 7.3.1 のデフォルト設定が適用される。crspは同一契約を再現し、§9.2 golden testで固定する:
 
 - **有効化**: デフォルトON (`retry: true`)。
 - **対象メソッド**: `GET, HEAD, PUT, OPTIONS, DELETE` — **POST は対象外** (create version/deployment等の非冪等POSTは再試行されない → 重複作成リスクなし)。
@@ -390,7 +397,7 @@ claspは gaxios 7.3.1 (package-lock解決済み) のデフォルトリトライ�
 - **contentDir** = プロジェクトルート + `srcDir|rootDir` (未設定・空文字列ならルート自身)。**jail判定はcontentDirをrealpath解決した値に対して** 行う (ファイル読書き・削除・リモート由来パスすべて)。CLIの `--rootDir` も同様にプロジェクトルート相対で解決 (`withContentDir`, `clasp.ts:129-141`)。
 - **認証 jail**: `.clasprc.json` のパス (または `-A` 指定先) への symlink 防御は `O_NOFOLLOW` + 事前 `symlink_metadata`。
 - **MCP jail**: `projectDir` = `resolve(与えられたパス)` が homedir 自身または homedir 配下、もしくは cwd 自身または cwd 配下であること。`sourceDir` = **`projectDir` 相対** で解決し、解決後パスが `projectDir` 配下であること (§5 #5 — claspの2段階基準不一致を統一)。
-- **OS差異**: macOS/Windows の大文字小文字非区別 FS 上では、大文字小文字違いの衝突 (`a.js` vs `A.js`) は検出しない (claspと同様、既知の制限として文書化)。Windows の symlink 保護は POSIX 機構が無いためベストエフォート (§2.3)。
+- **OS差異**: macOS/Windows の大文字小文字非区別 FS 上では、大文字小文字違いの衝突 (`a.js` vs `A.js`) は検出しない (claspと同様、既知の制限として文書化)。Windows の symlink 保護は POSIX 機構が無いためベストエフォート (§2.3)。**Windowsパス区切り**: ignoreパターン・remote名は `/` 基準 — 内部ではパスを `/` 区切りに正規化してからglob評価する (Windowsの `\` を変換)。jail判定・`path.relative` 相当は Rust `std::path` の解決に任せる。
 
 ## 9. テスト戦略 (golden test 形式 + live test 分離)
 
@@ -408,7 +415,7 @@ claspは gaxios 7.3.1 (package-lock解決済み) のデフォルトリトライ�
 各golden caseは以下を **ファイルとして固定** し、CIで機械比較する:
 
 1. `fixture/` — 入力: `.clasp.json` / `.clasprc.json` / `.claspignore` / ソースファイルツリー (実claspで生成した実物)
-2. `mock-transcript.toml` — wiremockに流す HTTP リクエスト/レスポンス ペア (実claspが発するリクエストを記録)。**リトライ挙動もここに固定** (§7.1の gaxios互換契約: 対象メソッド/ステータス/遅延系列を含む)
+2. `mock-transcript.toml` — wiremockに流す HTTP リクエスト/レスポンス ペア。**記録方法**: ①claspを `HTTPS_PROXY` で mitmproxy に向け実APIトランスクリプトを取得、または②claspの `test/mocks.ts` (nock) 定義を基に変換。**マスキング**: `Authorization` ヘッダ・refresh_token/access_token はプレースホルダに置換してコミット。**リトライ挙動もここに固定** (§7.1契約)
 3. `expected.json` — 期待値: stdout/stderr (§5差分部分はマスク付き)、exit code、書き換え後のファイルツリースナップショット、APIリクエストbody
 
 比較方法: crsp実行結果を expected と突き合わせ。`Unknown command` 等の `crsp` 文字列置換差分 (§5 #1) は expected に crsp 版を直接記載。
