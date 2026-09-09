@@ -1,6 +1,7 @@
 //! crsp - The Apps Script CLI (Rust reimplementation of clasp, spec
 //! docs/superpowers/specs/2026-09-09-crsp-design.md).
 
+pub mod auth;
 pub mod cli;
 pub mod constants;
 pub mod core;
