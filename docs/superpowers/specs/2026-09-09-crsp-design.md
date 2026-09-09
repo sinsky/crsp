@@ -75,7 +75,7 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - パースは **JSON5** (コメント・シングルクォート許容)。書き込みはプレーン JSON 2スペース。
 - キー: `scriptId`, `projectId`, `parentId` (配列なら先頭), `srcDir`|`rootDir` → contentDir (プロジェクトルート外はエラー), `filePushOrder`, `fileExtension`(レガシー), `scriptExtensions` (既定 `[".js",".gs"]`), `htmlExtensions` (既定 `[".html"]`), `jsonExtensions` (既定 `[".json"]`), `skipSubdirectories`, `allowSymlinks`。
 - **空文字列のedge**: `srcDir`/`rootDir` が空文字列 `""` の場合は未設定扱い (falsy) → contentDir = プロジェクトルート (`clasp.ts:208` の `config.srcDir || config.rootDir || '.'` 互換)。
-- `updateSettings` (clone/create/MCP create/clone 時の書き込み) は **常に** `scriptId`, `rootDir` (=srcDir), `parentId`, `projectId`, `scriptExtensions`, `htmlExtensions`, `jsonExtensions`, `filePushOrder: []` (常に空配列リセット), `skipSubdirectories` を書く。
+- `updateSettings` (clone/create/MCP create/clone 時の書き込み) は `scriptId`, `rootDir` (=srcDir, 常に書く), `parentId`, `projectId`, `scriptExtensions`, `htmlExtensions`, `jsonExtensions`, `filePushOrder: []` (常に空配列リセット), `skipSubdirectories` を対象とする。**値が `undefined` のキーは省略される** (`JSON.stringify` 挙動、`project.ts:447-459`) — 実質: `parentId`/`projectId` は未設定時キーごと欠落、それ以外は常に出力。
 
 **`.claspignore`**
 - プロジェクトルート (または `-I`)。BOM除去→行分割。
@@ -276,7 +276,7 @@ crsp/
 
 ## 4. 重要な互換性ルール (実装時の契約)
 
-1. `.clasp.json` は JSON5 で読み、プレーン JSON (2スペース) で書く。`updateSettings` は rootDir を常に書き、`filePushOrder` を空配列にリセット。
+1. `.clasp.json` は JSON5 で読み、プレーン JSON (2スペース) で書く。`updateSettings` は rootDir を常に書き、`filePushOrder` を空配列にリセット。**undefined値のキーは書き込み時に省略** (parentId/projectId は未設定時欠落)。
 2. `.clasprc.json` は V3 形式で書き、V1 2形式は `default` ユーザーのみ読む。書き込みは0600 + O_NOFOLLOW 直接書き込み (POSIX)。Windows はベストエフォート。
 3. 既定OAuthクライアントは clasp と同一の ID/secret (既存トークンがそのまま動く)。
 4. スコープ既定10種は clasp と完全一致。
@@ -341,7 +341,7 @@ crsp/
 | setup-logs | `{"success": true}` | `commands/setup-logs.ts` |
 | delete-script | **crsp追加: `{"success": true}`** (claspは出力なし — §5 #8) | `commands/delete-script.ts` |
 | open-* | `{"url": "..."}` + stdoutに行表示: ブラウザあり `Opening {url} in your browser.` / なし `Open {url} in your browser to continue.` (clasp互換維持 — `commands/utils.ts:180-202`) | `commands/open-*.ts`, `commands/utils.ts` |
-| tail-logs | LogEntry 1件につき 2sp JSON | `commands/tail-logs.ts` |
+| tail-logs | **JSON payload整形行** (clasp同一): `JSON.stringify(entry, null, 2)` をpayload列に埋め込んだ `severity 時刻 関数名 payload` 行 (§純JSONではない — 完全互換を採用)。--json時はpayload不在のエントリも出力可 | `commands/tail-logs.ts:122-149` |
 | start-mcp-server | MCPプロトコル (CLI出力なし) | `commands/start-mcp.ts` |
 
 JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先し、quirk として保守する。
