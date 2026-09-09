@@ -1,0 +1,56 @@
+[package]
+name = "crsp"
+version = "0.1.0"
+edition = "2024"
+description = "crsp - The Apps Script CLI"
+
+[dependencies]
+clap = { version = "~4.5", features = ["derive", "env"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+    "io-util",
+    "sync",
+    "fs",
+    "signal",
+] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls-native-roots",
+    "json",
+    "multipart",
+    "stream",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+indexmap = "2"
+json5 = "~0.4"
+globset = "~0.4"
+walkdir = "2"
+notify = "8"
+demand = "2"
+open = "5"
+home = "~0.5"
+rand = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
+url = "2"
+regex = "1"
+time = "0.3"
+thiserror = "2"
+unicode-width = "~0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
