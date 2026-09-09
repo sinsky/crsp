@@ -121,6 +121,9 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 - `--use-project-scopes`: マニフェスト `oauthScopes` を使用 (マニフェスト未設定時は既定スコープにフォールバック)。`--include-clasp-scopes` は `--use-project-scopes` と併用必須 (単独使用はエラー)。`--extra-scopes`: カンマ区切り、空要素でエラー。
 - ADC (`--adc`): Application Default Credentials。
 - `--redirect-port`: 0–65535 の整数検証。
+- create-script の既定titleは clasp の `inflection.humanize` 相当とする: 末尾の `_id`/`_ids` を削除し、`_` を空白に置換し、全体を小文字化した後、先頭1文字だけを大文字化する。ハイフンは区切り文字として扱わない (`my-project-folder` → `My-project-folder`, `My_App` → `My app`, `blog_id` → `Blog`)。
+- `list-versions` の通常出力はAPI結果を `.reverse()` して降順表示し、`--json` はraw API orderを維持する。
+- localhost flow のcallback listenerは `tokio::net::TcpListener` で実装する。accept loopで接続を受け、probeや不要な `/favicon.ico` を無視/204または404応答し、単発の有効な `GET /?code=...&state=...` を受けた時だけ最小のHTTP 200 HTMLレスポンスを返して終了する。`tokio::select!` で認可callback、Ctrl+C、必要なタイムアウトを統合し、同期/blockingサーバーや `spawn_blocking` は使用しない。
 
 ### 2.5 コマンドサーフェス (29コマンド・正規名/エイリアス)
 
@@ -140,10 +143,10 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 | 10 | `delete-deployment` | `undeploy` | `[deploymentId]` | `-a/--all` | **versioned判定は `deploymentConfig?.versionNumber !== undefined`** (`delete-deployment.ts:68,93`)。1件自動選択、複数は対話 |
 | 11 | `delete-script` | `delete` | `[scriptId]` | `-f/--force` | Drive trash。confirm必須 (非interactive+`-f`なし=サイレントno-op) |
 | 12 | `create-version` | `version` | `[description]` | なし | version作成 (対話入力フォールバック) |
-| 13 | `list-versions` | `versions` | `[scriptId]` | なし | 逆順リスト `N - desc` |
+| 13 | `list-versions` | `versions` | `[scriptId]` | なし | 通常出力は逆順リスト `N - desc`。`--json` はAPIのraw order (通常は昇順) を保持 |
 | 14 | `list-deployments` | `deployments` | `[scriptId]` | なし | `- {id} @{v|HEAD} {- desc}` |
 | 15 | `list-scripts` | `list` | なし | `--noShorten` | Driveスクリプト一覧 (既定20文字truncate) |
-| 16 | `run-function` | `run` | `[functionName]` | `--nondev`, `-p/--params <json>` | `scripts/{id}/run`。devMode既定true。関数名省略時fuzzy選択。`-p` はJSON配列として `JSON.parse` (失敗時はSyntaxErrorが伝播し exit 1)。`NOT_AUTHORIZED`→API実行可能deploy注意喚起、`NOT_FOUND`→関数不在メッセージ |
+| 16 | `run-function` | `run` | `[functionName]` | `--nondev`, `-p/--params <json>` | `scripts/{id}/run`。devMode既定true。関数名省略時fuzzy選択。`-p` はJSONとして解析し、結果を検証せず `parameters ?? []` として送信する。JSON構文エラーはSyntaxError相当としてexit 1。非配列値はclasp互換のためクライアント側で拒否しない。`NOT_AUTHORIZED`→API実行可能deploy注意喚起、`NOT_FOUND`→関数不在メッセージ |
 | 17 | `tail-logs` | `logs` | なし | `--watch`, `--simplified` | Cloud Logging取得。insertId重複排除。watchは6000msポーリング |
 | 18 | `setup-logs` | — | なし | なし | projectId確認・対話設定のみ (API呼び出しなし) |
 | 19 | `show-file-status` | `status` | なし | なし | push対象/未追跡ファイル一覧 (未追跡は共通親ディレクトリに圧縮) |
@@ -152,13 +155,13 @@ Google Apps Script CLI「clasp」を Rust で **フルパリティ** に再実�
 | 22 | `disable-api` | — | `<api>` | なし | マニフェスト更新 + Service Usage無効化 |
 | 23 | `open-script` | — | `[scriptId]` | なし | `https://script.google.com/d/{id}/edit` |
 | 24 | `open-container` | — | なし | なし | `parentId` 必須 → `https://drive.google.com/open?id={id}` |
-| 25 | `open-web-app` | — | `[deploymentId]` | なし | deployments列挙 (対話時, `updateTime`降順) → 選択または引数のdeploymentIdで `GET deployments/{id}` → `entryPoints` から `WEB_APP` を探し `webApp.url` を開く。WEB_APP不在時エラー |
+| 25 | `open-web-app` | — | `[deploymentId]` | なし | deployments列挙 (対話時, `updateTime`昇順) → 選択または引数のdeploymentIdで `GET deployments/{id}` → `entryPoints` から `WEB_APP` を探し `webApp.url` を開く。WEB_APP不在時エラー |
 | 26 | `open-logs` | — | なし | なし | Cloud Console logs viewer |
 | 27 | `open-api-console` | — | なし | なし | GCP APIs dashboard |
 | 28 | `open-credentials-setup` | — | なし | なし | GCP credentials ページ |
 | 29 | `start-mcp-server` | `mcp` | なし | なし | MCP stdio サーバー起動 |
 
-open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` を付与 (userinfo取得必要)。表示は `Opening {url} in your browser.`。
+open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` を付与 (userinfo取得必要)。stdoutがTTYでない場合はブラウザを起動せず `Open {url} in your browser to continue.` を表示してexit 0。stdoutがTTYの場合は `open::that(url)` を呼び、起動エラーは捕捉せずexit 1として伝播する。起動成功時の表示は `Opening {url} in your browser.`。
 
 ### 2.6 ファイルパイプラインとセキュリティ機構 (最難所・移植必須)
 
@@ -185,11 +188,13 @@ open系共通: `CLASP_ENABLE_USER_HINTS=true|1` のとき `?authUser=<userId>` �
 - 親ディレクトリ: mkdir -p (親のsymlinkチェック込み) + realpath照合で `parent_symlink` 検出 (`files.ts:723,740`)。
 - リモート由来パスの jail (`isInside`): contentDir 外脱出禁止 → `outside_content_dir`。
 - contentDir 自体: `lstat` でsymlink確認 (allowSymlinks=false時) + realpath取得 (`files.ts:679-689`)。
+- Path jailの `isInside` 判定は文字列prefixではなく、`Path::strip_prefix` またはcomponent比較でディレクトリ境界を検証する (`/app_fake` は `/app` 配下ではない)。
+- 並行mkdirで `EEXIST` を受けた場合は、既存パスがディレクトリであることと、解決後realpathがcontentDir内であることを再検証する。TOCTOUによるsymlink置換は `parent_symlink` として拒否する。
 - `-d/--deleteUnusedFiles`: リモートに無いローカルファイルを削除 (`-f` なしなら対話確認、非interactiveならスキップ警告)。削除対象も jail チェック。
 
 **watch (`push -w`)**: 500ms debounce、`.claspignore` フィルタ、起動時 `Waiting for changes...`。マニフェスト確認は **force状態がwatchループ内で維持される** (`push.ts:39`: 一度 `--force` またはconfirm承認なら以後確認なし、**confirm拒否でwatch終了**)。
 
-**並列度**: 書き込みは `pMap(files, mapper)` = **並列数無制限** (`files.ts:793`、p-mapのデフォルト)。crsp も無制限で再現 (§1.2 レイヤA: 動作互換)。
+**並列度**: claspの `pMap(files, mapper)` は論理上無制限 (`files.ts:793`、p-mapのデフォルト)だが、crspはOSのFD上限と実運用の安定性を優先し、同時ディスク書き込みをデフォルト32件に制限する。`tokio::sync::Semaphore` または `buffer_unordered(32)` を使用し、親ディレクトリ作成は並行 `EEXIST` を成功として扱う。これはLayer Cの内部資源制御であり、ファイル内容・相対パス・出力・exit code・API意味論の互換性を変更しない。
 
 ### 2.7 MCP サーバー (crsp契約 — clasp参照値は明記)
 
@@ -221,20 +226,21 @@ crsp/
 │   ├── constants.rs         # PROJECT_NAME="crsp", マニフェスト名, 既定OAuthクライアント
 │   ├── i18n.rs              # claspと同一の英語メッセージ定数 (§5差分のみ変更)
 │   ├── commands/            # 1コマンド1ファイル (clasp 1:1)
-│   │   ├── shared.rs        # assertScriptConfigured / assertGcpProjectConfigured / ellipsize / openUrl / spinner
-│   │   └── (29 files)
+│   │   ├── shared.rs        # assertScriptConfigured / assertGcpProjectConfigured / ellipsize / openUrl
+│   │   ├── ui.rs            # demand-based prompts and TTY-aware spinner boundary
+│   │   └── (29 command files)
 │   ├── core/                # ドメインロジック (UI非依存)
 │   │   ├── clasp.rs         # Clasp: config + credentials + APIクライアントを束ねる実行コンテキスト
-│   │   ├── project.rs       # createScript / listScripts / updateSettings (.clasp.json書込)
+│   │   ├── project.rs       # createScript / listScripts / updateSettings (.clasp.json書込; ordered mapは局所利用)
 │   │   ├── files.rs         # push/pullパイプライン + セキュリティ機構
-│   │   ├── manifest.rs      # appsscript.json 読書 (serde_json::Value, キー順保持)
+│   │   ├── manifest.rs         # appsscript.json 読書 (局所ordered mapでキー順保持)
 │   │   ├── ignore.rs        # micromatch互換マッチャー (match→補集合, dot有効)
 │   │   └── pagination.rs    # fetchWithPages (既定100/10, ServiceUsage例外200/10000)
 │   ├── auth/
 │   │   ├── credential_store.rs  # .clasprc.json 読書 (V1/V3互換, 0600, O_NOFOLLOW直接書き込み)
 │   │   ├── oauth_client.rs      # リフレッシュ, クライアント分類
 │   │   ├── flow.rs              # PKCE(S256) + state + auth URL
-│   │   ├── localhost_flow.rs    # tiny_http ローカルサーバー
+│   │   ├── localhost_flow.rs    # tokio::net::TcpListener 単発ローカルサーバー
 │   │   └── serverless_flow.rs   # URLコピペ
 │   ├── api/
 │   │   ├── script.rs / drive.rs / service_usage.rs / logging.rs / oauth2.rs / discovery.rs
@@ -248,36 +254,40 @@ crsp/
 | 用途 | クレート | バージョン目安 | 備考 |
 |---|---|---|---|
 | CLI | `clap` (derive) | `=4.5` | usageエラーも exit 1 に統一 (commander互換) |
-| async | `tokio` (full) + `futures` | `tokio = "1"` | 並列書き込み・watch・MCP |
-| HTTP | `reqwest` + `rustls` | `=0.12` | openssl回避の静的リンク |
-| JSON | `serde` + `serde_json` | `serde = "1"`, `serde_json = "1"` | 書き出し。`Value` でキー順保持 (`preserve_order` feature) |
+| async | `tokio` (targeted features) + `futures` | `tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "fs", "signal"] }` | 並列書き込み・watch・MCP・非同期OAuth callback・Ctrl+C |
+| HTTP | `reqwest` + `rustls` | `reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "multipart", "stream"] }` | native-tls/OpenSSLを除外し、Drive multipart uploadとstreamingを有効化。Googleの各サービスbase URLは本番既定値を使用し、テスト/golden harnessでは `ApiClient::with_base_urls` で注入可能 |
+| JSON | `serde` + `serde_json` + 局所 `indexmap` | `serde = "1"`, `serde_json = "1"`, `indexmap = "2"` | APIはstrongly-typed structsを基本とし、キー順が意味を持つ `appsscript.json` と `.clasp.json` のみ `IndexMap`/ordered JSONを使用 |
 | JSON5読込 | `json5` | `=0.4` | `.clasp.json` 読み込みのみ |
 | ignore | `globset` + 自前match→補集合 | `=0.4` | micromatch互換 (§2.3) |
 | ファイル走査 | `walkdir` | `=2` | skipSubdirectories は depth 0 |
 | watch | `notify` | `=8` | FSEvents/inotify + 500ms debounce |
-| 対話UI | `dialoguer` (`fuzzy-select` feature), `indicatif` | `dialoguer = "0.11"`, `indicatif = "0.17"` | spinner は TTY 時のみ |
+| 対話UI | `demand` | 最新安定版 | Input / Select / MultiSelect / Confirm / Dialog / Spinner を共通Ui境界で提供。TTY時のみ描画し、非TTY時はclasp互換フォールバック。 |
 | ブラウザ | `open` | `=5` | |
 | ホームディレクトリ | `home` | `=0.5` | 公式メンテ (cargo使用) |
 | OAuth暗号 | `rand` + `sha2` + `base64` | `rand = "0.9"`, `sha2 = "0.10"`, `base64 = "0.22"` | PKCE S256, state 256bit |
-| URL/文字列処理 | `url`, `regex`, `inflector` | `url = "2"`, `regex = "1"`, `inflector = "0.11"` | URL抽出、create-script既定titleのhumanize |
+| URL/文字列処理 | `url`, `regex` | `url = "2"`, `regex = "1"` | URL抽出、create-script既定titleは clasp の `inflection.humanize` 相当の自前helper (末尾 `_id`/`_ids` 削除、`_` を空白化、全体小文字化、先頭1文字のみ大文字化。ハイフンは維持)。regexはRust `LazyLock`で静的compileし、相対パスslash変換は`Cow`でUnix上のallocationを避ける |
 | 時刻 | `time` | `=0.3` | expiry_date (epoch ms), ログISO表示 |
 | ログ | `tracing` + `tracing-subscriber` (env-filter) | `=0.1` | claspの `Debug('clasp:*')` 相当 (`CRSP_DEBUG` または `RUST_LOG`) |
-| localhost redirect | `tiny_http` | `=0.12` | 1ルートのみで十分 (axumより軽量) |
+| localhost redirect | `tokio::net::TcpListener` | Tokio内蔵 | 単発のGET callbackを受け、最小HTTP 200 HTMLを返して終了。`tokio::select!` でキャンセル/タイムアウトに統合。 |
 | MCP | `rmcp` | 最新安定 | stdio transport |
-| エラー | `thiserror` + `anyhow` | `thiserror = "2"`, `anyhow = "1"` | mainでの表示用 |
+| エラー | `thiserror` | `thiserror = "2"` | CrspErrorに全エラーを集約し、mainで表示とexit codeへ変換。英語メッセージ定数は `i18n.rs` に集約 |
 | 表示幅 | `unicode-width` | `=0.2` | ellipsize |
 | テスト | `wiremock`, `assert_cmd`, `predicates`, `tempfile` | 最新安定 | §9 |
 
+Cargoのrelease profileは `opt-level = 3`, `lto = "thin"`, `codegen-units = 1`, `panic = "abort"`, `strip = true` とし、配布バイナリのサイズと起動時pagingを抑制する。
+
+APIレスポンスはstrongly-typed serde structsを基本とし、ordered mapはmanifestと`.clasp.json`のキー順保持が必要な箇所に限定する。正規表現は `std::sync::LazyLock` で静的compileし、相対パスのslash正規化は `Cow<'_, str>` を使って不要なallocationを避ける。
+
 ### 3.2 実行フロー
 
-1. `main()`: `#[tokio::main]`、clapパース。
+1. `main()`: 同期的にclapをパースし、`--version`/`--help`/usage errorと同期コマンドはTokio runtimeを構築せず即時終了する。非同期コマンドのみ `tokio::runtime::Builder::new_multi_thread().enable_all().build()` でruntimeを遅延構築する。Tokioは `rt-multi-thread`, `macros`, `net`, `time`, `io-util`, `sync`, `fs`, `signal` の限定featureのみ有効化する。
 2. preAction相当: グローバルオプションから `auth::init()` (credential store読み込み → 必要ならトークンリフレッシュ+再保存 or ADC) → `Clasp::init()` (`-P` または find-up で `.clasp.json` をJSON5パース → contentDir検証 → ignore matcher構築)。
 3. コマンドハンドラへ `Clasp` (Arc) を注入して実行。
 4. エラーはtyped error → mainで exit code 1 + stderrにmessage。未知コマンド・usageエラーも exit 1。
 
 ### 3.3 並行性
 
-- pull の並列書き込み: **無制限並列** (clasp の pMap デフォルトと同一、§2.6)。`futures::stream` の `buffer_unordered(usize::MAX)` 相当。
+- pull の並列書き込み: OSのFD枯渇を防ぐため、同時ディスク書き込みはデフォルト32件に制限する。`tokio::sync::Semaphore` または `futures::stream` の `buffer_unordered(32)` 相当を使用し、親ディレクトリ作成競合の `EEXIST` は成功として扱う。これはLayer Cの内部資源制御であり、claspと比較するファイル内容・相対パス・出力・exit code・API意味論は変更しない。
 - watch / MCP / logs polling は tokio 上のasyncタスク。
 - ファイルIOは少量なので直接同期実行 (必要時に `spawn_blocking`)。
 
@@ -292,10 +302,10 @@ crsp/
 7. push は変更0件→PUTせず `Script is already up to date.`、変更あり→**全ローカルファイル**を含むフル置換PUT (変更検出は表示と判断のみに使用)。
 8. pull 書き込みは直接書き込み (O_NOFOLLOW/0644、temp→renameではない) + symlink/jail 防御。
 9. 非interactive時のフォールバック: push manifest確認=拒否 / pull `-d` 削除=スキップ+警告 / delete=サイレントno-op。
-10. `--json` 出力契約は §6.2。open系はJSONモードでも `Opening {url}...` 行を表示 (clasp互換の意図的維持)。
+10. `--json` 出力契約は §6.2。open系はJSONモードでも `Opening {url}...` 行を表示 (clasp互換の意図的維持)。stdoutが非TTYなら `open::that` を呼ばず `Open {url} in your browser to continue.` を表示して成功 (exit 0) とする。stdoutがTTYで `open::that` が失敗した場合はエラーを伝播し、exit 1とする。
 11. ログポーリング6000ms、watch debounce 500ms。
 12. マニフェスト名はリモートから `appsscript` (拡張子なし)、ローカルは `appsscript.json`。
-13. 書き込み並列は無制限 (claspのpMapデフォルト互換)。
+13. pullの同時ディスク書き込みはデフォルト32件に制限し、FD枯渇を防ぐ。これはLayer Cの内部資源制御であり、互換性対象のファイル内容・相対パス・出力・exit code・API意味論を変更しない。
 
 ## 5. crsp における意図的な差分 (修正一覧・出力契約付き)
 
@@ -360,10 +370,11 @@ JSON 純度の例外 (open系) は「レイヤA: 出力文言互換」を優先�
 claspの全API呼び出しは googleapis-common 経由で **リトライデフォルトON** (`apirequest.js:260`)、gaxios 7.3.1 のデフォルト設定が適用される。crspは同一契約を再現し、§9.2 golden testで固定する:
 
 - **有効化**: デフォルトON (`retry: true`)。
-- **対象メソッド**: `GET, HEAD, PUT, OPTIONS, DELETE` — **POST は対象外** (create version/deployment等の非冪等POSTは再試行されない → 重複作成リスクなし)。
-- **対象ステータス**: `100–199`, `408`, `429`, `500–599`。ネットワーク層エラー (応答なし: ETIMEDOUT/ENOTFOUND等) は最大 **2回** (`noResponseRetries`)。
-- **リトライ回数**: 最大 **3回** (`retry: 3`、初回+3で最大4リクエスト)。
-- **遅延**: 初回リトライ `retryDelay` (既定 **100ms**)、以降 `100 + ((2^n − 1)/2) × 1000 ms` (n=currentRetryAttempt、`retryDelayMultiplier: 2`)。上限は `maxRetryDelay` (既定実質無制限) と totalTimeout 残時間 (`totalTimeout` 既定実質無制限)。`Retry-After` ヘッダは **考慮されない**。
+- **対象メソッド**: `GET, HEAD, PUT, OPTIONS, DELETE` — **POST は対象外** (create version/deployment等の非冪等POSTはtransient retryされない → 重複作成リスクなし)。
+- **対象ステータス**: `100–199`, `408`, `429`, `500–599`. ネットワーク層エラー (応答なし: ETIMEDOUT/ENOTFOUND等) は最大 **2回** (`noResponseRetries`) とし、通常のHTTP status retry回数とは分離する。
+- **リトライ回数**: HTTP status retryは最大 **3回** (`retry: 3`、初回+3で最大4リクエスト)。ネットワーク/no-response retryは最大2回。
+- **401 refresh retry**: §7.4の認証refreshはtransient retryと別レイヤー。401 Unauthorizedを受けた場合はHTTPメソッドに関係なく (POSTを含む) トークンrefresh後、元のリクエストを1回だけ再試行する。これはtransient retry回数に含めない。
+- **遅延**: 初回リトライ `retryDelay` (既定 **100ms**)、以降 `100 + ((2^n − 1)/2) × 1000 ms` (n=currentRetryAttempt、`retryDelayMultiplier: 2`)。上限は `maxRetryDelay` (既定実質無制限) と totalTimeout 残時間 (`totalTimeout` 既定実質無制限)。`Retry-After` ヘッダは **考慮されない**。実装はclock/sleeperを注入可能にし、テストでは実時間待機なしに遅延系列を検証する。
 - 中断 (abort/signal): 再試行なし。
 
 ### 7.2 タイムアウト
@@ -379,9 +390,9 @@ claspの全API呼び出しは googleapis-common 経由で **リトライデフ�
 
 ### 7.4 トークンリフレッシュ
 
-- 401/`invalid_grant` 時: リフレッシュ → 1回だけ再試行。
+- 401/`invalid_grant` 時の認証refreshは、一般のHTTP retryとは別レイヤーで扱う。401 Unauthorizedを受けた場合はHTTPメソッドに関係なく (POSTを含む) トークンをリフレッシュし、失敗したリクエストを1回だけ再試行する。これは§7.1のtransient retry回数には含めない。
 - リフレッシュ失敗: `Auth` エラー (`NOT_AUTHENTICATED`)、トークンを**上書きしない**、`crsp login` を促すメッセージ。
-- リフレッシュ成功: `.clasprc.json` 再保存 (0600/O_NOFOLLOW)。並行プロセスでの同時リフレッシュは **last-write-wins、lockなし** (clasp互換)。POSIXでのchmod失敗時は警告を出し保存は続行。
+- リフレッシュ成功: `.clasprc.json` 再保存 (0600/O_NOFOLLOW)。並行プロセスでの同時リフレッシュは **last-write-wins、lockなし** (clasp互換)。POSIXではchmod失敗時は **エラーとして伝播** (`chmodSync` 互換、`file_credential_store.ts:230`)。Windowsでは `#[cfg(windows)]` によりchmod/O_NOFOLLOWをベストエフォート扱いとし、権限変更非対応による失敗では処理を中断しない。
 
 ## 8. パス・ディレクトリモデル (jail判定の基準)
 
@@ -397,7 +408,7 @@ claspの全API呼び出しは googleapis-common 経由で **リトライデフ�
 - **contentDir** = プロジェクトルート + `srcDir|rootDir` (未設定・空文字列ならルート自身)。**jail判定はcontentDirをrealpath解決した値に対して** 行う (ファイル読書き・削除・リモート由来パスすべて)。CLIの `--rootDir` も同様にプロジェクトルート相対で解決 (`withContentDir`, `clasp.ts:129-141`)。
 - **認証 jail**: `.clasprc.json` のパス (または `-A` 指定先) への symlink 防御は `O_NOFOLLOW` + 事前 `symlink_metadata`。
 - **MCP jail**: `projectDir` = `resolve(与えられたパス)` が homedir 自身または homedir 配下、もしくは cwd 自身または cwd 配下であること。`sourceDir` = **`projectDir` 相対** で解決し、解決後パスが `projectDir` 配下であること (§5 #5 — claspの2段階基準不一致を統一)。
-- **OS差異**: macOS/Windows の大文字小文字非区別 FS 上では、大文字小文字違いの衝突 (`a.js` vs `A.js`) は検出しない (claspと同様、既知の制限として文書化)。Windows の symlink 保護は POSIX 機構が無いためベストエフォート (§2.3)。**Windowsパス区切り**: ignoreパターン・remote名は `/` 基準 — 内部ではパスを `/` 区切りに正規化してからglob評価する (Windowsの `\` を変換)。jail判定・`path.relative` 相当は Rust `std::path` の解決に任せる。
+- **OS差異**: macOS/Windows の大文字小文字非区別 FS 上では、大文字小文字違いの衝突 (`a.js` vs `A.js`) は検出しない (claspと同様、既知の制限として文書化)。Windows の symlink 保護は POSIX 機構が無いためベストエフォート (§2.3)。**Windowsパス区切り**: ignoreパターン・remote名・ファイル比較・PUT payloadの相対パスは `/` 基準 — 内部では相対パスを `/` 区切りに正規化してからglob評価、変更検出、API送信を行う (Windowsの `\` を変換)。jail判定・`path.relative` 相当は Rust `std::path` の解決に任せる。
 
 ## 9. テスト戦略 (golden test 形式 + live test 分離)
 
@@ -406,7 +417,7 @@ claspの全API呼び出しは googleapis-common 経由で **リトライデフ�
 | レイヤ | 手法 |
 |---|---|
 | core unit | ignoreマッチャー・config発見・manifest・衝突検出・pagination・jail判定を網羅 (純粋関数) |
-| APIクライアント | `wiremock` でエンドポイントモック。トークンリフレッシュ・401再試行・リトライ契約 (§7.1: メソッド/ステータス/遅延系列/noResponseRetries) 含む |
+| APIクライアント | `wiremock` でエンドポイントモック。base URL overrideを子プロセス単位で設定し、トークンリフレッシュ・401再試行・リトライ契約 (§7.1: メソッド/ステータス/遅延系列/noResponseRetries) 含む |
 | CLI統合 | `assert_cmd` + `tempfile` 仮想プロジェクト |
 | MCP | rmcp クライアントで5ツールのschema/出力検証 |
 
