@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod constants;
+pub mod core;
 pub mod error;
 pub mod i18n;
 pub mod output;
