@@ -62,7 +62,7 @@ impl DriveApi<'_> {
     /// (page size 100, max 10 pages).
     pub async fn list_files(&self) -> Result<PagedResults<DriveFile>, CrspError> {
         let client = self.0;
-        crate::core::pagination::fetch_pages(
+        crate::core::pagination::fetch_pages_send(
             |page_size: usize, page_token: Option<String>| {
                 let url = append_query_if_some(
                     &append_query(

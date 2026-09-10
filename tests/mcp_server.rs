@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crsp::api::BaseUrls;
 use crsp::mcp::server::{McpServer, validate_project_dir};
-use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, ToolAnnotations};
+use rmcp::model::{CallToolRequestParams, CallToolResponse, ToolAnnotations};
 use rmcp::service::{ClientServiceExt, ServiceExt};
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::{ClientHandler, RoleClient, RoleServer};
@@ -47,10 +47,6 @@ fn args(values: Value) -> Option<serde_json::Map<String, Value>> {
     serde_json::from_value(values).unwrap()
 }
 
-fn result_value(result: CallToolResult) -> CallToolResult {
-    result
-}
-
 #[tokio::test]
 async fn advertises_exact_tools_schemas_annotations_and_metadata() {
     let (client, server) = connected().await;
@@ -86,20 +82,60 @@ async fn advertises_exact_tools_schemas_annotations_and_metadata() {
         }
     }
 
-    let push = listed
-        .tools
-        .iter()
-        .find(|tool| tool.name == "push_files")
-        .unwrap();
-    assert_eq!(
-        push.input_schema.get("required"),
-        Some(&json!(["projectDir"]))
-    );
-    assert_eq!(
-        push.input_schema["properties"]["projectDir"]["type"],
-        "string"
-    );
-    assert!(push.output_schema.is_some());
+    for tool in &listed.tools {
+        let required = tool
+            .input_schema
+            .get("required")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .cloned()
+            .unwrap_or(json!({}));
+        match tool.name.as_ref() {
+            "push_files" | "pull_files" => {
+                assert_eq!(required, json!(["projectDir"]));
+                assert_eq!(properties["projectDir"]["type"], "string");
+            }
+            "create_project" => {
+                assert_eq!(required, json!(["projectDir"]));
+                assert_eq!(properties["projectDir"]["type"], "string");
+                assert!(
+                    properties["sourceDir"]["type"] == "string"
+                        || properties["sourceDir"]["type"] == json!(["string", "null"])
+                );
+                assert!(
+                    properties["projectName"]["type"] == "string"
+                        || properties["projectName"]["type"] == json!(["string", "null"])
+                );
+            }
+            "clone_project" => {
+                assert_eq!(required, json!(["projectDir"]));
+                assert_eq!(properties["projectDir"]["type"], "string");
+                assert!(
+                    properties["sourceDir"]["type"] == "string"
+                        || properties["sourceDir"]["type"] == json!(["string", "null"])
+                );
+                assert!(
+                    properties["scriptId"]["type"] == "string"
+                        || properties["scriptId"]["type"] == json!(["string", "null"])
+                );
+            }
+            "list_projects" => {
+                assert!(required.is_null());
+                assert!(
+                    properties
+                        .as_object()
+                        .is_none_or(|properties| properties.is_empty())
+                );
+            }
+            name => panic!("unexpected tool {name}"),
+        }
+        if tool.name != "list_projects" {
+            assert!(tool.output_schema.is_some());
+        }
+    }
     server.cancel().await.expect("close server");
 }
 
@@ -193,6 +229,243 @@ async fn list_projects_returns_exact_text_and_structured_content() {
     server_task.await.unwrap().cancel().await.unwrap();
 }
 
+async fn connected_with_urls(
+    urls: BaseUrls,
+) -> (
+    rmcp::service::RunningService<RoleClient, TestClient>,
+    rmcp::service::RunningService<RoleServer, McpServer>,
+) {
+    let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let server = McpServer::with_base_urls(urls);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(AsyncRwTransport::<RoleServer, _, _>::new_server(
+                server_read,
+                server_write,
+            ))
+            .await
+            .expect("server initializes")
+    });
+    let client = TestClient
+        .serve_with_lifecycle(
+            AsyncRwTransport::<RoleClient, _, _>::new_client(client_read, client_write),
+            rmcp::service::ClientLifecycleMode::Initialize,
+        )
+        .await
+        .expect("client initializes");
+    let server = server_task.await.expect("server task completes");
+    (client, server)
+}
+
+async fn call_complete(
+    client: &rmcp::service::RunningService<RoleClient, TestClient>,
+    name: &str,
+    arguments: Value,
+) -> rmcp::model::CallToolResult {
+    match client
+        .call_tool_once(
+            CallToolRequestParams::new(name.to_owned())
+                .with_arguments(arguments.as_object().unwrap().clone()),
+        )
+        .await
+        .expect("tools/call")
+    {
+        CallToolResponse::Complete(result) => result,
+        _ => panic!("expected complete result"),
+    }
+}
+
+fn text(result: &rmcp::model::CallToolResult, index: usize) -> &str {
+    result.content[index].as_text().unwrap().text.as_str()
+}
+
+fn all_test_urls(base: &str) -> BaseUrls {
+    BaseUrls {
+        script: base.to_string(),
+        drive: base.to_string(),
+        ..BaseUrls::default()
+    }
+}
+
+#[tokio::test]
+async fn push_and_pull_return_exact_success_shapes_without_status() {
+    let api = WireMockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "old"}]}),
+        ))
+        .mount(&api)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&api)
+        .await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    std::fs::write(project.path().join("Code.js"), "new").unwrap();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    let push = call_complete(&client, "push_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(
+        text(&push, 0),
+        format!(
+            "Pushed project in {} to remote server successfully.",
+            project.path().display()
+        )
+    );
+    assert_eq!(
+        text(&push, 1),
+        format!("Updated file: {}", project.path().join("Code.js").display())
+    );
+    assert_eq!(
+        push.structured_content,
+        Some(
+            json!({"scriptId":"script-1","projectDir":project.path(),"files":[project.path().join("Code.js")]})
+        )
+    );
+    assert!(
+        push.structured_content
+            .as_ref()
+            .unwrap()
+            .get("status")
+            .is_none()
+    );
+    let pull = call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(
+        text(&pull, 0),
+        format!(
+            "Pulled project in {} to local filesystem successfully.",
+            project.path().display()
+        )
+    );
+    assert_eq!(
+        text(&pull, 1),
+        format!("Updated file: {}", project.path().join("Code.js").display())
+    );
+    assert_eq!(
+        pull.structured_content,
+        Some(
+            json!({"scriptId":"script-1","projectDir":project.path(),"files":[project.path().join("Code.js")]})
+        )
+    );
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn pull_failure_uses_correct_error_prefix() {
+    let api = WireMockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error":{"message":"boom"}})))
+        .mount(&api)
+        .await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    let result = call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert!(text(&result, 0).starts_with("Error pulling project:"));
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn create_project_runs_create_pull_and_update_settings_flow() {
+    let api = WireMockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"scriptId":"created-1"})))
+        .mount(&api)
+        .await;
+    Mock::given(method("GET")).and(path("/v1/projects/created-1/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"files":[{"name":"appsscript","type":"JSON","source":"{}"},{"name":"Code","type":"SERVER_JS","source":"function main() {}"}]}))).mount(&api).await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap()
+        .keep();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    let result = call_complete(
+        &client,
+        "create_project",
+        json!({"projectDir":project,"projectName":"Demo"}),
+    )
+    .await;
+    assert_eq!(
+        text(&result, 0),
+        format!(
+            "Created project created-1 in {} successfully.",
+            project.display()
+        )
+    );
+    assert_eq!(
+        result.structured_content.as_ref().unwrap()["scriptId"],
+        "created-1"
+    );
+    assert!(project.join(".clasp.json").exists());
+    assert!(project.join("appsscript.json").exists());
+    assert!(project.join("Code.js").exists());
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &std::fs::read_to_string(project.join(".clasp.json")).unwrap()
+        )
+        .unwrap()["scriptId"],
+        "created-1"
+    );
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn clone_success_writes_settings_and_is_stateless_per_server() {
+    let api = WireMockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/clone-1/content"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({"files":[{"name":"Code","type":"SERVER_JS","source":"clone"}]}),
+            ),
+        )
+        .expect(2)
+        .mount(&api)
+        .await;
+    let first = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let second = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    for project in [first.path(), second.path()] {
+        let result = call_complete(
+            &client,
+            "clone_project",
+            json!({"projectDir":project,"scriptId":"clone-1"}),
+        )
+        .await;
+        assert_eq!(
+            text(&result, 0),
+            format!(
+                "Cloned project clone-1 in {} successfully.",
+                project.display()
+            )
+        );
+        assert!(project.join(".clasp.json").exists());
+    }
+    server.cancel().await.unwrap();
+}
+
 #[test]
 fn validates_project_and_source_jails() {
     let home = PathBuf::from("/home/test");
@@ -215,9 +488,4 @@ fn tool_annotations_are_expressible_by_rmcp() {
         .idempotent(false)
         .read_only(true);
     assert_eq!(annotations.read_only_hint, Some(true));
-}
-
-#[allow(dead_code)]
-fn _keep_types_used(_: Value, _: PathBuf) {
-    let _ = result_value;
 }

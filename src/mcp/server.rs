@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use home::home_dir;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
 use rmcp::service::ServiceExt;
 use rmcp::transport::io::stdio;
@@ -12,13 +12,12 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api::drive::{FilesListPage, LIST_FIELDS, SCRIPT_MIME_TYPE_QUERY};
-use crate::api::{ApiClient, ApiClientConfig, ApiRequest, BaseUrls};
+use crate::api::{ApiClient, ApiClientConfig, BaseUrls};
 use crate::commands::shared::pull_initial_files;
 use crate::core::config::ProjectConfig;
 use crate::core::files::{LocalExtensions, pull_files, push_files};
 use crate::core::path::PathJail;
-use crate::core::project::{create_script, fetch_remote_files};
+use crate::core::project::{create_script, fetch_remote_files, list_scripts};
 use crate::error::CrspError;
 
 const SCRIPT_ID_REQUIRED: &str = "Script ID is required.";
@@ -406,29 +405,11 @@ impl McpServer {
             Ok(client) => client,
             Err(error) => return error_result("Error listing projects", error),
         };
-        let url = format!(
-            "{}/v3/files?pageSize=100&fields={}&q={}",
-            client.base_urls().drive.trim_end_matches('/'),
-            LIST_FIELDS,
-            SCRIPT_MIME_TYPE_QUERY
-        );
-        let scripts = match client
-            .request(ApiRequest {
-                method: reqwest::Method::GET,
-                url,
-                body: None,
-            })
-            .await
-        {
-            Ok(response) => match response.json::<FilesListPage>().await {
-                Ok(scripts) => scripts,
-                Err(error) => return error_result("Error listing projects", error),
-            },
+        let scripts = match list_scripts(&client).await {
+            Ok(scripts) => scripts.results,
             Err(error) => return error_result("Error listing projects", error),
         };
         let entries = scripts
-            .files
-            .unwrap_or_default()
             .into_iter()
             .filter_map(|script| {
                 Some(ScriptOutput {
@@ -452,8 +433,13 @@ impl McpServer {
     }
 }
 
-#[tool_handler(name = "Crsp", version = "0.1.0")]
-impl ServerHandler for McpServer {}
+#[tool_handler(name = "Crsp")]
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("Crsp", env!("CARGO_PKG_VERSION")))
+    }
+}
 
 pub async fn start_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let service = McpServer::new().serve(stdio()).await?;
