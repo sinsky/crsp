@@ -102,14 +102,19 @@ async fn live_gate_skips_without_flag_or_credentials() {
 /// into `home`.
 fn stage_fixture(case_dir: &Path, project: &Path, home: &Path) {
     let fixture = case_dir.join("fixture");
-    copy_tree(&fixture, project, Some(HOME_DIR));
-    let fixture_home = fixture.join(HOME_DIR);
-    if fixture_home.exists() {
-        copy_tree(&fixture_home, home, None);
+    if fixture.exists() {
+        copy_tree(&fixture, project, Some(HOME_DIR));
+        let fixture_home = fixture.join(HOME_DIR);
+        if fixture_home.exists() {
+            copy_tree(&fixture_home, home, None);
+        }
     }
 }
 
 fn copy_tree(from: &Path, to: &Path, skip: Option<&str>) {
+    if !from.exists() {
+        return;
+    }
     std::fs::create_dir_all(to).unwrap();
     let mut entries: Vec<_> = std::fs::read_dir(from)
         .unwrap()
