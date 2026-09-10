@@ -156,12 +156,13 @@ fn error_result(prefix: &str, error: impl std::fmt::Display) -> CallToolResult {
 fn success_with_files(
     message: String,
     script_id: String,
-    project_dir: &Path,
+    project_dir_raw: &str,
+    resolved_dir: &Path,
     files: Vec<String>,
 ) -> CallToolResult {
     let absolute_files: Vec<String> = files
         .iter()
-        .map(|file| project_dir.join(file).to_string_lossy().into_owned())
+        .map(|file| resolved_dir.join(file).to_string_lossy().into_owned())
         .collect();
     let mut content = vec![ContentBlock::text(message)];
     content.extend(
@@ -171,7 +172,10 @@ fn success_with_files(
     );
     let structured = json!(FilesOutput {
         script_id,
-        project_dir: project_dir.to_string_lossy().into_owned(),
+        // clasp parity (mcp/server.ts:146, 233, 346, 462): structuredContent
+        // echoes the raw tool-input argument; path resolution applies only to
+        // the `files` entries (and the jail error text).
+        project_dir: project_dir_raw.to_string(),
         files: absolute_files,
     });
     let mut result = CallToolResult::structured(structured);
@@ -211,6 +215,7 @@ impl McpServer {
                     args.project_dir
                 ),
                 script_id,
+                &args.project_dir,
                 &project_dir,
                 result
                     .files
@@ -266,6 +271,7 @@ impl McpServer {
                             args.project_dir
                         ),
                         script_id,
+                        &args.project_dir,
                         &project_dir,
                         remote.into_iter().map(|file| file.local_path).collect(),
                     ),
@@ -333,6 +339,7 @@ impl McpServer {
                                 args.project_dir
                             ),
                             script_id,
+                            &args.project_dir,
                             &project_dir,
                             pulled.files,
                         )
@@ -395,6 +402,7 @@ impl McpServer {
                         args.project_dir
                     ),
                     script_id,
+                    &args.project_dir,
                     &project_dir,
                     pulled.files,
                 )

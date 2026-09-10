@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crsp::api::BaseUrls;
 use crsp::mcp::server::{McpServer, validate_project_dir};
@@ -378,6 +378,67 @@ async fn push_and_pull_return_exact_success_shapes_without_status() {
         Some(
             json!({"scriptId":"script-1","projectDir":project.path(),"files":[project.path().join("Code.js")]})
         )
+    );
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn structured_content_echoes_raw_project_dir() {
+    // clasp parity (mcp/server.ts:146, 233, 346, 462): structuredContent
+    // echoes the raw tool-input argument; only `files` entries (and the jail
+    // error text) are resolved absolute paths.
+    let api = WireMockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "old"}]}),
+        ))
+        .mount(&api)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&api)
+        .await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    std::fs::write(project.path().join("Code.js"), "new").unwrap();
+    // Relative input inside the jail (cwd descendant).
+    let relative = project
+        .path()
+        .strip_prefix(std::env::current_dir().unwrap())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    let push = call_complete(&client, "push_files", json!({"projectDir": relative})).await;
+    assert_eq!(
+        text(&push, 0),
+        format!("Pushed project in {relative} to remote server successfully.")
+    );
+    let structured = push.structured_content.as_ref().unwrap();
+    assert_eq!(structured["projectDir"], json!(relative));
+    let files: Vec<String> = serde_json::from_value(structured["files"].clone()).unwrap();
+    assert_eq!(
+        files,
+        vec![
+            project
+                .path()
+                .join("Code.js")
+                .to_string_lossy()
+                .into_owned()
+        ]
+    );
+    assert!(files.iter().all(|file| Path::new(file).is_absolute()));
+    assert_eq!(
+        text(&push, 1),
+        format!("Updated file: {}", project.path().join("Code.js").display())
     );
     server.cancel().await.unwrap();
 }
