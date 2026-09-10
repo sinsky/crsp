@@ -257,18 +257,27 @@ impl ApiClient {
     /// §7.1, §7.4), converting failures into [`CrspError`]. Success is any
     /// 2xx response; every other final outcome is an error.
     pub async fn request(&self, request: ApiRequest) -> Result<ApiResponse, CrspError> {
-        // clasp parity (google-auth-library 10.5.0
-        // `getRequestMetadataAsync`): with no credentials at all the auth
-        // layer throws before any request is sent; replicate that locally so
-        // an unauthenticated run fails fast instead of sending an empty
-        // bearer (spec §4.3 contract).
+        // clasp parity (google-auth-library 10.5.0 `getRequestMetadataAsync`):
+        // an empty access token with a refresh mechanism refreshes lazily at
+        // FIRST USE, before any API request. Without a refresh mechanism the
+        // closure fails locally — the `No access, refresh token, API key or
+        // refresh handler callback is set.` error — so an unauthenticated run
+        // fails fast instead of sending an empty bearer (spec §4.3 contract).
+        // A refresh that completes without a token is the library's
+        // `Could not refresh access token.` error.
         if self
             .access_token
             .lock()
             .expect("access token lock")
             .is_empty()
         {
-            return Err(CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string()));
+            let new_token = (self.refresh)().await?;
+            if new_token.is_empty() {
+                return Err(CrspError::Auth(
+                    crate::i18n::COULD_NOT_REFRESH_ACCESS_TOKEN.to_string(),
+                ));
+            }
+            *self.access_token.lock().expect("access token lock") = new_token;
         }
         let response = self.execute(&request).await?;
         if response.status().is_success() {

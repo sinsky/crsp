@@ -1412,41 +1412,39 @@ async fn load_credentials_reads_the_store_without_adc() {
 }
 
 // ---------------------------------------------------------------------------
-// Refresh-token-only .clasprc.json at init (parked audit item 15, clasp
-// parity fix): google-auth-library refreshes on first use instead of
-// treating the entry as logged out.
+// Refresh-token-only .clasprc.json (parked audit item 15, fix round 1):
+// google-auth-library keeps the entry and refreshes lazily at the FIRST API
+// request — never at init — so `logout` and `login` stay network-free.
 // ---------------------------------------------------------------------------
 
-static OAUTH2_BASE_ENV_LOCK: Mutex<()> = Mutex::new(());
+static API_BASE_ENV_LOCK: Mutex<()> = Mutex::new(());
+const API_ENV_VARS: [&str; 2] = ["CRSP_API_BASE_URL", "CRSP_OAUTH2_BASE_URL"];
 
-/// Holds the `CRSP_OAUTH2_BASE_URL` lock for the guard's lifetime, unsetting
-/// the variable on drop (the refresh path reads it per process).
+/// Holds the `CRSP_API_BASE_URL` / `CRSP_OAUTH2_BASE_URL` lock for the
+/// guard's lifetime, unsetting the variables on drop (the API and refresh
+/// paths read them per process).
 #[allow(dead_code)]
-struct Oauth2BaseEnvGuard(std::sync::MutexGuard<'static, ()>);
+struct ApiBaseEnvGuard(std::sync::MutexGuard<'static, ()>);
 
-impl Drop for Oauth2BaseEnvGuard {
+impl Drop for ApiBaseEnvGuard {
     fn drop(&mut self) {
-        unsafe { std::env::remove_var("CRSP_OAUTH2_BASE_URL") };
+        for name in API_ENV_VARS {
+            unsafe { std::env::remove_var(name) };
+        }
     }
 }
 
-fn oauth2_base_env_guard(url: &str) -> Oauth2BaseEnvGuard {
-    let guard = OAUTH2_BASE_ENV_LOCK
+fn api_base_env_guard(url: &str) -> ApiBaseEnvGuard {
+    let guard = API_BASE_ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    unsafe { std::env::set_var("CRSP_OAUTH2_BASE_URL", url) };
-    Oauth2BaseEnvGuard(guard)
+    for name in API_ENV_VARS {
+        unsafe { std::env::set_var(name, url) };
+    }
+    ApiBaseEnvGuard(guard)
 }
 
-#[tokio::test]
-async fn refresh_token_only_entry_refreshes_at_init_like_clasp() {
-    let server = wiremock::MockServer::start().await;
-    token_mock(
-        &server,
-        200,
-        serde_json::json!({"access_token": "ACCESS-REFRESHED-AT-INIT", "expires_in": 3600}),
-    )
-    .await;
+fn refresh_only_store() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let store_path = dir.path().join(".clasprc.json");
     std::fs::write(
@@ -1454,7 +1452,28 @@ async fn refresh_token_only_entry_refreshes_at_init_like_clasp() {
         r#"{"tokens": {"default": {"type": "authorized_user", "refresh_token": "REFRESH-LOGIN"}}}"#,
     )
     .unwrap();
-    let _env = oauth2_base_env_guard(&server.uri());
+    (dir, store_path)
+}
+
+#[tokio::test]
+async fn refresh_token_only_entry_refreshes_at_first_request_like_clasp() {
+    let server = wiremock::MockServer::start().await;
+    token_mock(
+        &server,
+        200,
+        serde_json::json!({"access_token": "ACCESS-REFRESHED-AT-FIRST-USE", "expires_in": 3600}),
+    )
+    .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/projects/script/content"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "// ok\n"}]})),
+        )
+        .mount(&server)
+        .await;
+    let (_dir, store_path) = refresh_only_store();
+    let _env = api_base_env_guard(&server.uri());
     let context = crsp::core::clasp::Clasp::init_context(
         None,
         None,
@@ -1465,30 +1484,27 @@ async fn refresh_token_only_entry_refreshes_at_init_like_clasp() {
     )
     .await
     .unwrap();
-    let credentials = context.credentials.as_ref().expect("refreshed credentials");
+    // NO refresh at init: the entry is kept with its empty access token and
+    // the store is untouched (logout/login never reach the network).
     assert_eq!(
-        credentials.access_token.as_deref(),
-        Some("ACCESS-REFRESHED-AT-INIT")
+        server.received_requests().await.unwrap_or_default().len(),
+        0,
+        "init must not refresh"
     );
-    // The refreshed entry is persisted with the refresh token kept.
-    let saved: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
-    assert_eq!(
-        saved["tokens"]["default"]["access_token"],
-        "ACCESS-REFRESHED-AT-INIT"
-    );
-    assert_eq!(saved["tokens"]["default"]["refresh_token"], "REFRESH-LOGIN");
-    assert!(
-        saved["tokens"]["default"]["expiry_date"].as_i64().unwrap()
-            > std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-    );
-    // The grant used the default clasp client (clasp's default OAuth client
-    // supplies id/secret when the store has none).
+    let credentials = context.credentials.as_ref().expect("entry kept");
+    assert_eq!(credentials.access_token, None);
+    assert_eq!(credentials.refresh_token.as_deref(), Some("REFRESH-LOGIN"));
+    // First API request: exactly one refresh POST, then the call with the
+    // fresh bearer (google-auth-library `getRequestMetadataAsync`).
+    context
+        .client
+        .script()
+        .get_content("script", None)
+        .await
+        .expect("first-use refresh makes the API call succeed");
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 1, "exactly one refresh POST");
+    assert_eq!(requests.len(), 2, "one refresh POST + one API call");
+    assert_eq!(requests[0].url.path(), "/token");
     let pairs = form_pairs(&requests[0]);
     assert_form_contains(&pairs, "grant_type", "refresh_token");
     assert_form_contains(&pairs, "refresh_token", "REFRESH-LOGIN");
@@ -1502,13 +1518,70 @@ async fn refresh_token_only_entry_refreshes_at_init_like_clasp() {
         "client_secret",
         crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET,
     );
+    assert_eq!(requests[1].url.path(), "/v1/projects/script/content");
+    assert_eq!(
+        requests[1]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer ACCESS-REFRESHED-AT-FIRST-USE")
+    );
+    // The refreshed entry is persisted with the refresh token kept.
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
+    assert_eq!(
+        saved["tokens"]["default"]["access_token"],
+        "ACCESS-REFRESHED-AT-FIRST-USE"
+    );
+    assert_eq!(saved["tokens"]["default"]["refresh_token"], "REFRESH-LOGIN");
+    assert!(
+        saved["tokens"]["default"]["expiry_date"].as_i64().unwrap()
+            > std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+    );
+}
+
+#[tokio::test]
+async fn logout_with_refresh_token_only_entry_succeeds_offline() {
+    // Fix round 1 regression guard: logout is a pure store delete with no
+    // network (clasp logout.ts:37-44). A broken refresh token must never
+    // block the recovery path — the wiremock has NO mocks mounted, so any
+    // refresh attempt would fail the command.
+    let server = wiremock::MockServer::start().await;
+    let (_dir, store_path) = refresh_only_store();
+    let _env = api_base_env_guard(&server.uri());
+    let context = crsp::core::clasp::Clasp::init_context(
+        None,
+        None,
+        Some(&store_path),
+        "default",
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    let result = crsp::auth::logout(&context.store, "default").await.unwrap();
+    assert!(result.deleted, "the refresh-only entry must be deleted");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
+    assert!(
+        saved["tokens"].get("default").is_none(),
+        "entry removed from the store: {saved}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        0,
+        "logout must not touch the network"
+    );
 }
 
 #[tokio::test]
 async fn entry_without_any_token_stays_logged_out_at_init() {
     // The discard path is preserved: an entry with neither token is still
-    // treated as logged out (clasp's client then fails at request time with
-    // the no-credentials error).
+    // treated as logged out (the client then fails at request time with the
+    // no-credentials error).
     let dir = tempfile::tempdir().unwrap();
     let store_path = dir.path().join(".clasprc.json");
     std::fs::write(

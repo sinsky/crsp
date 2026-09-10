@@ -1,0 +1,20 @@
+{
+  "command": [
+    "push"
+  ],
+  "env": {},
+  "stdout": "",
+  "stderr": "Failed to refresh access token: Failed to fetch access token: invalid_grant. Run `crsp login` to authorize again.\n",
+  "exit": 1,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"type\": \"authorized_user\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\"\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/Code.js": "// hello\n"
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/token"
+    }
+  ]
+}

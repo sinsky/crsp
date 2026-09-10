@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "default": {
+      "type": "authorized_user",
+      "refresh_token": "REFRESH-PLACEHOLDER"
+    }
+  }
+}

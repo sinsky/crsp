@@ -194,6 +194,10 @@ pub fn access_token_request_failed(detail: &str) -> String {
     format!("Failed to fetch access token: {detail}")
 }
 
+/// `Could not refresh access token.` (google-auth-library
+/// `getAccessTokenAsync`: the refresh completed without an access token).
+pub const COULD_NOT_REFRESH_ACCESS_TOKEN: &str = "Could not refresh access token.";
+
 // ---------------------------------------------------------------------------
 // Project lifecycle and version/deployment commands (spec §2.5 rows 4-15;
 // clasp commands/clone-script.ts, create-script.ts, create-version.ts,

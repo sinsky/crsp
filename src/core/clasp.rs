@@ -48,27 +48,16 @@ impl Clasp {
         let store = CredentialStore::new(auth_path(auth)?, allow_symlinks);
         let mut credentials = load_credentials(&store, user, adc).await?;
         // google-auth-library parity (clasp `getAuthorizedOAuth2Client`): a
-        // saved entry with a missing/empty access token is not "logged out"
-        // when a refresh token exists — the client refreshes on first use.
+        // saved entry with a missing/empty access token is kept when a
+        // refresh token exists — the client refreshes lazily at the FIRST API
+        // request (`getRequestMetadataAsync`), never at init, so `logout` and
+        // `login` stay network-free even when the refresh token is broken.
         // Only an entry with nothing to refresh with is discarded.
-        let access_token_absent = credentials
-            .as_ref()
-            .is_some_and(|current| current.access_token.as_deref().is_none_or(str::is_empty));
-        if access_token_absent {
-            match credentials
-                .as_ref()
-                .and_then(|current| current.refresh_token.clone())
-            {
-                Some(_) => {
-                    let current = credentials.as_ref().expect("credentials loaded");
-                    let client = env_oauth_client();
-                    credentials = Some(
-                        refresh_and_save(&client, current, &store, user, &reqwest::Client::new())
-                            .await?,
-                    );
-                }
-                None => credentials = None,
-            }
+        if credentials.as_ref().is_some_and(|current| {
+            current.access_token.as_deref().is_none_or(str::is_empty)
+                && current.refresh_token.is_none()
+        }) {
+            credentials = None;
         }
         if let Some(current) = credentials.as_ref()
             && current
@@ -95,8 +84,12 @@ impl Clasp {
             let credentials_state = Arc::clone(&refresh_credentials_for_closure);
             let credentials = credentials_state.lock().unwrap().clone();
             Box::pin(async move {
-                let credentials = credentials
-                    .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))?;
+                let credentials = credentials.ok_or_else(|| {
+                    // google-auth-library `getRequestMetadataAsync` throws
+                    // this exact error when there is no access token AND no
+                    // refresh mechanism (empty store entry / not logged in).
+                    CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string())
+                })?;
                 let client = env_oauth_client();
                 let refreshed = refresh_and_save(
                     &client,
