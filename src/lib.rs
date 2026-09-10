@@ -59,7 +59,7 @@ async fn run_async(cli: &Cli) -> Result<(), CrspError> {
     )
     .await?;
     match &cli.command {
-        Some(Commands::StartMcpServer) => crate::mcp::start_server()
+        Some(Commands::StartMcpServer) => crate::mcp::start_server(&context)
             .await
             .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string()))),
         Some(Commands::Login(args)) => run_login(cli, args).await,

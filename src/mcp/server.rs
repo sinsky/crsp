@@ -476,13 +476,13 @@ impl ServerHandler for McpServer {
     }
 }
 
-pub async fn start_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn start_server(
+    context: &Arc<crate::core::clasp::Clasp>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // clasp start-mcp.ts: the MCP server shares the preAction-initialized
     // auth context (user credentials from `$HOME`), so tool API calls carry
     // the user's bearer token and 401-refresh exactly like the CLI commands.
-    let context =
-        crate::core::clasp::Clasp::init_context(None, None, None, "default", false, false).await?;
-    let service = McpServer::with_context(&context).serve(stdio()).await?;
+    let service = McpServer::with_context(context).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
