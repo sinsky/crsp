@@ -1,5 +1,8 @@
 use assert_cmd::Command;
 use predicates::str::contains;
+use std::io::{BufRead, BufReader, Write};
+use std::process::Stdio;
+use tempfile::tempdir;
 
 const ALIAS_PAIRS: &[(&str, &str, &[&str])] = &[
     ("clone", "clone-script", &[]),
@@ -35,8 +38,13 @@ fn canonical_commands_have_command_specific_binary_outcomes() {
             1,
             "No such file",
         ),
-        ("logout", &[], 0, ""),
-        ("show-authorized-user", &[], 0, ""),
+        ("logout", &["--json"], 0, "\"success\": true"),
+        (
+            "show-authorized-user",
+            &["--json"],
+            0,
+            "\"loggedIn\": false",
+        ),
         ("clone-script", &[], 1, "No script ID."),
         (
             "create-script",
@@ -81,8 +89,12 @@ fn canonical_commands_have_command_specific_binary_outcomes() {
             1,
             "GCP project ID is not set",
         ),
+        ("start-mcp-server", &[], 0, ""),
     ];
     for (command, args, code, expected) in cases {
+        if *command == "start-mcp-server" {
+            continue;
+        }
         let output = run_binary(command, args);
         assert_eq!(output.status.code(), Some(*code), "{command}");
         let text = format!(
@@ -92,6 +104,54 @@ fn canonical_commands_have_command_specific_binary_outcomes() {
         );
         assert!(text.contains(expected), "{command}: {text}");
     }
+}
+
+#[test]
+fn start_mcp_server_returns_initialize_response() {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_crsp"))
+        .arg("start-mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"surface\",\"version\":\"1\"}}}\n")
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+        let _ = sender.send(result);
+    });
+    let line = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(response["result"]["serverInfo"]["name"], "Crsp");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn auth_surface_uses_command_specific_fixture_observables() {
+    let directory = tempdir().unwrap();
+    let auth = directory.path().join(".clasprc.json");
+    std::fs::write(
+        &auth,
+        r#"{"tokens":{"default":{"access_token":"ACCESS-PLACEHOLDER"}}}"#,
+    )
+    .unwrap();
+    let output = run_binary("logout", &["--auth", auth.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Deleted credentials."));
+    let output = run_binary("show-authorized-user", &["--auth", auth.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Not logged in."));
 }
 
 #[test]

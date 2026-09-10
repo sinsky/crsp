@@ -119,16 +119,11 @@ pub async fn push<A: PromptAdapter>(
     let output_ref = std::rc::Rc::new(std::cell::RefCell::new(output));
     let force_state = std::sync::Arc::new(std::sync::Mutex::new(force));
     let ignore = config.ignore_matcher().await?;
-    let content_root = config.content_dir.clone();
+    let project_root = config.project_root_dir.clone();
     watch_files_filtered(
         &config.content_dir,
         Duration::from_millis(500),
-        move |path| {
-            path.strip_prefix(&content_root)
-                .ok()
-                .map(|relative| ignore.is_tracked(&relative.to_string_lossy().replace('\\', "/")))
-                .unwrap_or(false)
-        },
+        move |path| is_tracked_event_path(&project_root, &ignore, path),
         move |paths| {
             let relevant = paths.iter().any(|path| {
                 path.file_name().and_then(|name| name.to_str()) == Some("appsscript.json")
@@ -188,6 +183,17 @@ fn print_result(
         )?;
     }
     Ok(())
+}
+
+pub fn is_tracked_event_path(
+    project_root: &Path,
+    ignore: &crate::core::ignore::IgnoreMatcher,
+    path: &Path,
+) -> bool {
+    path.strip_prefix(project_root)
+        .ok()
+        .map(|relative| ignore.is_tracked(&relative.to_string_lossy().replace('\\', "/")))
+        .unwrap_or(false)
 }
 
 pub fn content_dir(config: &ProjectConfig) -> &Path {

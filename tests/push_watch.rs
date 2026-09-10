@@ -1,7 +1,63 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tempfile::tempdir;
+
+#[test]
+fn watcher_ignore_matching_uses_project_root_for_src_dir() {
+    let directory = tempdir().unwrap();
+    let content = directory.path().join("src");
+    std::fs::create_dir(&content).unwrap();
+    let ignored = content.join("ignored.js");
+    let tracked = content.join("tracked.js");
+    let matcher = crsp::core::ignore::IgnoreMatcher::from_patterns(["src/ignored.js"]).unwrap();
+
+    assert!(!crsp::commands::push::is_tracked_event_path(
+        directory.path(),
+        &matcher,
+        &ignored,
+    ));
+    assert!(crsp::commands::push::is_tracked_event_path(
+        directory.path(),
+        &matcher,
+        &tracked,
+    ));
+    assert!(Path::new("src/ignored.js").starts_with("src"));
+}
+
+#[tokio::test]
+async fn watcher_filter_rejects_ignored_src_dir_events() {
+    let directory = tempdir().unwrap();
+    let content = directory.path().join("src");
+    std::fs::create_dir(&content).unwrap();
+    let ignored = content.join("ignored.js");
+    let seen = Arc::new(Mutex::new(0));
+    let received = Arc::clone(&seen);
+    let stop = crsp::commands::push::watch_files_filtered(
+        &content,
+        Duration::from_millis(40),
+        move |path| path.file_name().and_then(|name| name.to_str()) != Some("ignored.js"),
+        move |_| {
+            let received = Arc::clone(&received);
+            Box::pin(async move {
+                *received.lock().unwrap() += 1;
+                Ok(false)
+            })
+        },
+    );
+    let writer = async {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        std::fs::write(&ignored, "ignored").unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    };
+    let (_, result) = tokio::join!(
+        writer,
+        tokio::time::timeout(Duration::from_millis(300), stop)
+    );
+    assert!(result.is_err());
+    assert_eq!(*seen.lock().unwrap(), 0);
+}
 
 #[tokio::test]
 async fn notify_watch_reports_one_burst_after_debounce() {

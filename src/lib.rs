@@ -49,7 +49,7 @@ pub fn run(cli: &Cli) -> Result<(), CrspError> {
 }
 
 async fn run_async(cli: &Cli) -> Result<(), CrspError> {
-    let _context = Clasp::init_context(
+    let context = Clasp::init_context(
         cli.globals.project.as_deref().map(Path::new),
         cli.globals.ignore.as_deref().map(Path::new),
         cli.globals.auth.as_deref().map(Path::new),
@@ -63,9 +63,9 @@ async fn run_async(cli: &Cli) -> Result<(), CrspError> {
             .await
             .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string()))),
         Some(Commands::Login(args)) => run_login(cli, args).await,
-        Some(Commands::Logout) => run_logout(cli).await,
-        Some(Commands::ShowAuthorizedUser) => run_show_user(cli).await,
-        Some(command) => run_command(cli, command).await,
+        Some(Commands::Logout) => run_logout(cli, &context).await,
+        Some(Commands::ShowAuthorizedUser) => run_show_user(cli, &context).await,
+        Some(command) => run_command(cli, command, context).await,
         None => unreachable!(),
     }
 }
@@ -113,12 +113,9 @@ async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
     Ok(())
 }
 
-async fn run_logout(cli: &Cli) -> Result<(), CrspError> {
-    let store = CredentialStore::new(
-        auth_path(cli.globals.auth.as_deref())?,
-        cli.globals.allow_symlinks,
-    );
-    let result = logout(&store, &cli.globals.user).await?;
+async fn run_logout(cli: &Cli, context: &std::sync::Arc<Clasp>) -> Result<(), CrspError> {
+    let store = &context.store;
+    let result = logout(store, &cli.globals.user).await?;
     let mut output = Output::stdout(cli.globals.json);
     if output.is_json() {
         output.print_json(&crate::auth::flow::logout_payload())?;
@@ -128,16 +125,12 @@ async fn run_logout(cli: &Cli) -> Result<(), CrspError> {
     Ok(())
 }
 
-async fn run_show_user(cli: &Cli) -> Result<(), CrspError> {
-    let store = CredentialStore::new(
-        auth_path(cli.globals.auth.as_deref())?,
-        cli.globals.allow_symlinks,
-    );
-    let credentials =
-        crate::auth::load_credentials(&store, &cli.globals.user, cli.globals.adc).await?;
+async fn run_show_user(cli: &Cli, context: &std::sync::Arc<Clasp>) -> Result<(), CrspError> {
+    let store = &context.store;
+    let credentials = context.credentials.clone();
     let payload = show_authorized_user(
         credentials,
-        Some(&store),
+        Some(store),
         &cli.globals.user,
         &reqwest::Client::new(),
         &AuthEndpoints::default(),
@@ -157,16 +150,11 @@ async fn run_show_user(cli: &Cli) -> Result<(), CrspError> {
     Ok(())
 }
 
-async fn run_command(cli: &Cli, command: &Commands) -> Result<(), CrspError> {
-    let context = Clasp::init(
-        cli.globals.project.as_deref().map(Path::new),
-        cli.globals.ignore.as_deref().map(Path::new),
-        cli.globals.auth.as_deref().map(Path::new),
-        &cli.globals.user,
-        cli.globals.adc,
-        cli.globals.allow_symlinks,
-    )
-    .await?;
+async fn run_command(
+    cli: &Cli,
+    command: &Commands,
+    context: std::sync::Arc<Clasp>,
+) -> Result<(), CrspError> {
     let ui = Ui::new(DemandAdapter);
     let opener = SystemOpener;
     let mut output = Output::stdout(cli.globals.json);
