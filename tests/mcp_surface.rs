@@ -13,11 +13,38 @@ fn mcp_alias_and_canonical_return_identical_initialize_responses() {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.as_mut().unwrap().write_all(request).unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (&stdin).write_all(request);
+            let _ = sender.send(result);
+        });
+        if let Err(error) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| Err(std::io::Error::other("timed out writing MCP request")))
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("failed to write MCP request: {error}");
+        }
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+            let _ = sender.send(result);
+        });
+        let line = match receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| Err(std::io::Error::other("timed out reading MCP response")))
+        {
+            Ok(line) => line,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("failed to read MCP response: {error}");
+            }
+        };
         let _ = child.kill();
         let _ = child.wait();
         line
