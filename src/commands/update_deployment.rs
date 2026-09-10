@@ -12,7 +12,9 @@ use crate::commands::shared::{parse_version, print_deployment_result};
 use crate::core::config::ProjectConfig;
 use crate::core::project::{assert_script_configured, deploy};
 use crate::error::CrspError;
+use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, Ui};
 
 /// Arguments for [`update_deployment`] (clasp `update-deployment
 /// <deploymentId> -V -d`).
@@ -22,24 +24,30 @@ pub struct UpdateDeploymentArgs<'a> {
     pub description: Option<&'a str>,
 }
 
-pub async fn update_deployment(
+pub async fn update_deployment<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
     deployment_id: &str,
     args: UpdateDeploymentArgs<'_>,
+    ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<Deployment, CrspError> {
     let script_id = assert_script_configured(config).await?.to_string();
     let version_number = parse_version(args.version_number)?;
     let description = args.description.unwrap_or_default();
-    let deployment = deploy(
-        client,
-        &script_id,
-        description,
-        Some(deployment_id),
-        version_number,
-    )
-    .await?;
+    let outcome = ui.with_spinner(i18n::DEPLOYING_PROJECT, move || {
+        crate::ui::drive_isolated(async move {
+            deploy(
+                client,
+                &script_id,
+                description,
+                Some(deployment_id),
+                version_number,
+            )
+            .await
+        })
+    })?;
+    let deployment = outcome?;
     print_deployment_result(&deployment, true, output)?;
     Ok(deployment)
 }

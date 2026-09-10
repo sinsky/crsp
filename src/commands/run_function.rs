@@ -89,16 +89,23 @@ pub async fn run_function<A: PromptAdapter>(
     }
 
     let script_id = assert_script_configured(config).await?.to_string();
-    let result = match client
-        .script()
-        .run(
-            &script_id,
-            function_name.as_deref(),
-            parameters,
-            !args.nondev,
-        )
-        .await
-    {
+    let outcome = ui.with_spinner(
+        &i18n::running_function(function_name.as_deref().unwrap_or_default()),
+        move || {
+            crate::ui::drive_isolated(async move {
+                client
+                    .script()
+                    .run(
+                        &script_id,
+                        function_name.as_deref(),
+                        parameters,
+                        !args.nondev,
+                    )
+                    .await
+            })
+        },
+    )?;
+    let result = match outcome {
         // clasp run-function.ts:111-125: `error.cause?.code` special cases.
         Err(CrspError::Api {
             kind: crate::api::error::ApiErrorKind::NotAuthorized,

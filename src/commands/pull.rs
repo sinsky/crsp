@@ -30,7 +30,10 @@ pub async fn pull<A: PromptAdapter>(
     // clasp pull.ts:45-66: locals are collected before the pull (the list
     // also feeds the --deleteUnusedFiles comparison); collect-time symlink
     // skips warn on stderr in human mode only.
-    let collected = collect_local_files(config).await?;
+    let outcome = ui.with_spinner(crate::i18n::CHECKING_LOCAL_FILES, move || {
+        crate::ui::drive_isolated(async move { collect_local_files(config).await })
+    })?;
+    let collected = outcome?;
     if !output.is_json() {
         for item in &collected.skipped {
             if item.reason == SkipReason::Symlink {
@@ -44,14 +47,21 @@ pub async fn pull<A: PromptAdapter>(
             }
         }
     }
-    let mut result = pull_files(
-        &pull_inputs,
-        &config.content_dir,
-        config.allow_symlinks,
-        32,
-        &extensions,
-    )
-    .await?;
+    let pull_inputs_ref: &[crate::core::files::PullFile] = &pull_inputs;
+    let extensions_ref: &crate::core::files::LocalExtensions = &extensions;
+    let outcome = ui.with_spinner(crate::i18n::PULLING_FILES, move || {
+        crate::ui::drive_isolated(async move {
+            pull_files(
+                pull_inputs_ref,
+                &config.content_dir,
+                config.allow_symlinks,
+                32,
+                extensions_ref,
+            )
+            .await
+        })
+    })?;
+    let mut result = outcome?;
     // clasp pull.ts:75-91: every write skip warns with the clasp reason text
     // (human mode only).
     if !output.is_json() {

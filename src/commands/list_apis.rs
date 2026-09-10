@@ -137,10 +137,20 @@ pub async fn list_apis<A: PromptAdapter, O: crate::commands::shared::UrlOpener>(
     maybe_prompt_for_project_id(config, ui, opener, output).await?;
     crate::commands::shared::assert_gcp_project_configured(config)?;
 
-    let (enabled_apis, available_apis) = tokio::try_join!(
-        get_enabled_services(client, config),
-        get_available_services(client)
-    )?;
+    let config_ref: &crate::core::config::ProjectConfig = config;
+    let outcome = ui.with_spinner(i18n::FETCHING_APIS, move || {
+        crate::ui::drive_isolated(async move {
+            // Sequentially so the request order is deterministic (the
+            // enabled-services list precedes the discovery list).
+            (
+                get_enabled_services(client, config_ref).await,
+                get_available_services(client).await,
+            )
+        })
+    })?;
+    let (enabled_apis, available_apis) = outcome;
+    let enabled_apis = enabled_apis?;
+    let available_apis = available_apis?;
 
     if output.is_json() {
         output.print_json(&ListApisJson {

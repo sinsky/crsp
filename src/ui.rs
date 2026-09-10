@@ -6,6 +6,7 @@
 //! noninteractive fallbacks so prompt logic never leaks into commands.
 
 use std::io::{self, IsTerminal};
+use std::ops::{Deref, DerefMut};
 
 use crate::error::CrspError;
 
@@ -238,4 +239,56 @@ fn map_prompt_error(error: io::Error) -> CrspError {
     } else {
         CrspError::Io(error)
     }
+}
+
+/// Drives the async `body` to completion on a dedicated scoped worker thread
+/// backed by a private Tokio runtime, blocking the calling thread and
+/// returning the body's output.
+///
+/// [`Ui::with_spinner`] closes over a synchronous `FnOnce` body, and that body
+/// may run either inline inside a command task (noninteractive runs) or on the
+/// spinner's raw scoped thread when the TTY is interactive. From an inline
+/// command task the ambient runtime's threads are all busy driving the CLI, so
+/// a future could not be synchronously driven there even with
+/// [`Handle::block_on`](tokio::runtime::Handle::block_on); a private runtime on
+/// its own thread works from either place without touching (or deadlocking)
+/// the ambient one.
+/// A process-wide Tokio runtime dedicated to driving spinner-wrapped service
+/// calls ([`drive_isolated`]): one runtime instead of one per call, because
+/// per-call runtimes are measurable (each builds a thread pool) and their
+/// churn starves busy test environments.
+static ISOLATED_RUNTIME: std::sync::Mutex<Option<tokio::runtime::Runtime>> =
+    std::sync::Mutex::new(None);
+
+/// A `Handle` to the shared isolated runtime, building it on first use.
+/// The ambient runtime cannot be reused from the spinner thread (the thread
+/// local context is not shared across threads), so service calls are driven
+/// on this runtime instead.
+fn isolated_handle() -> tokio::runtime::Handle {
+    let mut guard = ISOLATED_RUNTIME.lock().unwrap();
+    if guard.is_none() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("isolated spinner runtime");
+        *guard.deref_mut() = Some(runtime);
+    }
+    guard.deref().as_ref().unwrap().handle().clone()
+}
+
+pub fn drive_isolated<'a, F: std::future::Future + Send + 'a>(body: F) -> F::Output
+where
+    F::Output: Send + 'a,
+{
+    let handle = isolated_handle();
+    std::thread::scope(|scope| {
+        let join = scope.spawn(move || handle.block_on(body));
+        match join.join() {
+            // The scoped thread's failure to return means it panicked; the
+            // scope re-raises before returning, so reaching this fallback is a
+            // compiler-only shim.
+            Ok(output) => output,
+            Err(_) => unreachable!(),
+        }
+    })
 }

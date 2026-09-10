@@ -106,15 +106,21 @@ pub async fn clone_script<A: PromptAdapter>(
 
     // clasp clone-script.ts:142-152: a 400 from the content fetch surfaces
     // as `Invalid script ID.`; other errors propagate.
-    let pulled =
-        match pull_initial_files(client, &script_id, &config, args.cwd, version_number).await {
-            Ok(pulled) => pulled,
-            Err(CrspError::Api {
-                kind: ApiErrorKind::InvalidArgument,
-                ..
-            }) => return Err(CrspError::Validation(i18n::INVALID_SCRIPT_ID.to_string())),
-            Err(error) => return Err(error),
-        };
+    let config_ref: &crate::core::config::ProjectConfig = &config;
+    let script_id_ref: &str = &script_id;
+    let outcome = ui.with_spinner(i18n::CLONING_SCRIPT, move || {
+        crate::ui::drive_isolated(async move {
+            pull_initial_files(client, script_id_ref, config_ref, args.cwd, version_number).await
+        })
+    })?;
+    let pulled = match outcome {
+        Ok(pulled) => pulled,
+        Err(CrspError::Api {
+            kind: ApiErrorKind::InvalidArgument,
+            ..
+        }) => return Err(CrspError::Validation(i18n::INVALID_SCRIPT_ID.to_string())),
+        Err(error) => return Err(error),
+    };
     with_script_id(&config, &script_id)
         .update_settings()
         .await?;

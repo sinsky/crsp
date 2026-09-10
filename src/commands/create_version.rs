@@ -42,12 +42,17 @@ pub async fn create_version<A: PromptAdapter>(
             default: Some(String::new()),
         })?);
     }
-    let version_number = version(
-        client,
-        &script_id,
-        description.as_deref().unwrap_or_default(),
-    )
-    .await?;
+    let outcome = ui.with_spinner(i18n::CREATING_A_NEW_VERSION, move || {
+        crate::ui::drive_isolated(async move {
+            version(
+                client,
+                &script_id,
+                description.as_deref().unwrap_or_default(),
+            )
+            .await
+        })
+    })?;
+    let version_number = outcome?;
     if output.is_json() {
         output.print_json(&CreateVersionResult { version_number })?;
     } else {

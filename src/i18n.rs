@@ -492,6 +492,49 @@ pub const ENABLING_SERVICE: &str = "Enabling service...";
 /// `Disabling service...` (clasp disable-api.ts spinner message).
 pub const DISABLING_SERVICE: &str = "Disabling service...";
 
+/// `Pushing files...` (clasp push.ts:62 spinner message).
+pub const PUSHING_FILES: &str = "Pushing files...";
+
+/// `Checking local files...` (clasp pull.ts:47 spinner message).
+pub const CHECKING_LOCAL_FILES: &str = "Checking local files...";
+
+/// `Pulling files...` (clasp pull.ts:69 spinner message).
+pub const PULLING_FILES: &str = "Pulling files...";
+
+/// `Cloning script...` (clasp clone-script.ts:87, create-script.ts:163
+/// spinner message).
+pub const CLONING_SCRIPT: &str = "Cloning script...";
+
+/// `Creating script...` (clasp create-script.ts:95,120 spinner message).
+pub const CREATING_SCRIPT: &str = "Creating script...";
+
+/// `Creating a new version...` (clasp create-version.ts:51 spinner message).
+pub const CREATING_A_NEW_VERSION: &str = "Creating a new version...";
+
+/// `Fetching versions...` (clasp list-versions.ts:37 spinner message).
+pub const FETCHING_VERSIONS: &str = "Fetching versions...";
+
+/// `Deploying project...` (clasp create-deployment.ts:44,
+/// update-deployment.ts:51 spinner message).
+pub const DEPLOYING_PROJECT: &str = "Deploying project...";
+
+/// `Fetching deployments...` (clasp list-deployments.ts:36,
+/// delete-deployment.ts:61 spinner message).
+pub const FETCHING_DEPLOYMENTS: &str = "Fetching deployments...";
+
+/// `Deleting deployment...` (clasp delete-deployment.ts:42 spinner message).
+pub const DELETING_DEPLOYMENT: &str = "Deleting deployment...";
+
+/// `Finding your scripts...` (clasp list-scripts.ts:36 spinner message).
+pub const FINDING_YOUR_SCRIPTS: &str = "Finding your scripts...";
+
+/// `Deleting your scripts...` (clasp delete-script.ts:55 spinner message).
+pub const DELETING_YOUR_SCRIPTS: &str = "Deleting your scripts...";
+
+/// `Analyzing project files...` (clasp show-file-status.ts:38 spinner
+/// message).
+pub const ANALYZING_PROJECT_FILES: &str = "Analyzing project files...";
+
 /// `Not authorized to enable {name} or it does not exist.` (clasp
 /// enable-api.ts:43-50).
 pub fn not_authorized_to_enable(name: &str) -> String {

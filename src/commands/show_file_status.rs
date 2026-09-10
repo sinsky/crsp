@@ -4,7 +4,9 @@ use crate::core::config::ProjectConfig;
 use crate::core::files::{LocalFile, collect_local_files};
 use crate::core::path::relative_path;
 use crate::error::CrspError;
+use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, Ui};
 
 #[derive(Debug, Serialize)]
 pub struct StatusPayload {
@@ -14,12 +16,16 @@ pub struct StatusPayload {
     pub untracked_files: Vec<String>,
 }
 
-pub async fn show_file_status<W: std::io::Write, E: std::io::Write>(
+pub async fn show_file_status<A: PromptAdapter, W: std::io::Write, E: std::io::Write>(
     cwd: &std::path::Path,
     config: &ProjectConfig,
+    ui: &Ui<A>,
     output: &mut Output<W, E>,
 ) -> Result<StatusPayload, CrspError> {
-    let collected = collect_local_files(config).await?;
+    let outcome = ui.with_spinner(i18n::ANALYZING_PROJECT_FILES, move || {
+        crate::ui::drive_isolated(async move { collect_local_files(config).await })
+    })?;
+    let collected = outcome?;
     // clasp `localPath` values are `path.relative(cwd, …)`; the core
     // collection is contentDir-relative, so convert for every display path.
     let tracked = collected

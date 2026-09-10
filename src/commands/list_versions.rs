@@ -13,6 +13,7 @@ use crate::core::project::assert_script_configured;
 use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, Ui};
 
 /// `--json` entry (clasp `{versionNumber, description}` per version, raw API
 /// order; undefined keys are omitted by `JSON.stringify`).
@@ -24,17 +25,21 @@ struct VersionJson<'a> {
     description: Option<&'a str>,
 }
 
-pub async fn list_versions(
+pub async fn list_versions<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
     script_id: Option<&str>,
+    ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<Vec<Version>, CrspError> {
     let script_id = match script_id {
         Some(script_id) => script_id.to_string(),
         None => assert_script_configured(config).await?.to_string(),
     };
-    let versions = client.script().list_versions(&script_id).await?.results;
+    let outcome = ui.with_spinner(i18n::FETCHING_VERSIONS, move || {
+        crate::ui::drive_isolated(async move { client.script().list_versions(&script_id).await })
+    })?;
+    let versions = (outcome?).results;
     if output.is_json() {
         let entries: Vec<_> = versions
             .iter()

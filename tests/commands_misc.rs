@@ -1409,11 +1409,13 @@ async fn tail_logs_watch_sleeps_interval_and_dedupes_across_polls() {
     });
     let polls = RefCell::new(0);
     let mut state = PollState::default();
+    let no_spinner: Option<&crsp::ui::Ui<TestPrompt>> = None;
     let mut poller = crsp::commands::tail_logs::LogPoller::new(
         &client,
         "proj",
         false,
         false,
+        no_spinner,
         &mut state,
         &mut output,
     );

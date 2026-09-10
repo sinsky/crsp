@@ -22,6 +22,7 @@ use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
 use crate::text::humanize_title;
+use crate::ui::{PromptAdapter, Ui};
 
 /// Standalone script types; `webapp`/`api` are aliases of `standalone`
 /// because deployment happens via create-deployment (clasp
@@ -89,10 +90,11 @@ pub fn default_project_name(cwd: &Path) -> String {
     )
 }
 
-pub async fn create_script(
+pub async fn create_script<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
     args: CreateScriptArgs<'_>,
+    ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<CreateScriptResult, CrspError> {
     if config.script_id.is_some() {
@@ -109,7 +111,12 @@ pub async fn create_script(
 
     let (script_id, created_parent_id) = if STANDALONE_SCRIPT_TYPES.contains(&script_type.as_str())
     {
-        let script_id = create_project_script(client, &name, args.parent_id).await?;
+        let outcome = ui.with_spinner(i18n::CREATING_SCRIPT, move || {
+            crate::ui::drive_isolated(async move {
+                create_project_script(client, &name, args.parent_id).await
+            })
+        })?;
+        let script_id = outcome?;
         if !output.is_json() {
             output.message(&i18n::created_standalone_script(
                 &format!("https://script.google.com/d/{script_id}/edit"),
@@ -136,7 +143,12 @@ pub async fn create_script(
                 VALID_TYPES,
             )));
         };
-        let (script_id, parent_id) = create_with_container(client, &name, mime_type).await?;
+        let outcome = ui.with_spinner(i18n::CREATING_SCRIPT, move || {
+            crate::ui::drive_isolated(async move {
+                create_with_container(client, &name, mime_type).await
+            })
+        })?;
+        let (script_id, parent_id) = outcome?;
         if !output.is_json() {
             output.message(&i18n::created_container_script(
                 &format!("https://drive.google.com/open?id={parent_id}"),
@@ -148,7 +160,14 @@ pub async fn create_script(
 
     // Initial pull + settings write (clasp create-script.ts:162-172). clasp
     // createScript sets `options.project = {scriptId, parentId}`.
-    let pulled = pull_initial_files(client, &script_id, &config, args.cwd, None).await?;
+    let config_ref: &crate::core::config::ProjectConfig = &config;
+    let script_id_ref: &str = &script_id;
+    let outcome = ui.with_spinner(i18n::CLONING_SCRIPT, move || {
+        crate::ui::drive_isolated(async move {
+            pull_initial_files(client, script_id_ref, config_ref, args.cwd, None).await
+        })
+    })?;
+    let pulled = outcome?;
     let parent_for_settings = created_parent_id
         .clone()
         .or_else(|| args.parent_id.map(str::to_string));

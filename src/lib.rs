@@ -197,6 +197,7 @@ async fn run_command(
                     root_dir: args.root_dir.as_deref(),
                     cwd: &cwd,
                 },
+                &ui,
                 &mut output,
             )
             .await?;
@@ -250,6 +251,7 @@ async fn run_command(
                     description: args.description.as_deref(),
                     deployment_id: args.deployment_id.as_deref(),
                 },
+                &ui,
                 &mut output,
             )
             .await?;
@@ -263,6 +265,7 @@ async fn run_command(
                     version_number: args.version_number.as_deref(),
                     description: args.description.as_deref(),
                 },
+                &ui,
                 &mut output,
             )
             .await?;
@@ -304,6 +307,7 @@ async fn run_command(
                 &context.client,
                 &config,
                 args.script_id.as_deref(),
+                &ui,
                 &mut output,
             )
             .await?;
@@ -313,6 +317,7 @@ async fn run_command(
                 &context.client,
                 &config,
                 args.script_id.as_deref(),
+                &ui,
                 &mut output,
             )
             .await?;
@@ -321,6 +326,7 @@ async fn run_command(
             crate::commands::list_scripts::list_scripts(
                 &context.client,
                 args.no_shorten,
+                &ui,
                 &mut output,
             )
             .await?;
@@ -358,7 +364,8 @@ async fn run_command(
             crate::commands::setup_logs::setup_logs(&mut config, &ui, &opener, &mut output).await?;
         }
         Commands::ShowFileStatus => {
-            crate::commands::show_file_status::show_file_status(&cwd, &config, &mut output).await?;
+            crate::commands::show_file_status::show_file_status(&cwd, &config, &ui, &mut output)
+                .await?;
         }
         Commands::ListApis => {
             crate::commands::list_apis::list_apis(

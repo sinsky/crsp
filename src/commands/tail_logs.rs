@@ -27,6 +27,7 @@ use crate::commands::shared::{
 use crate::core::config::ProjectConfig;
 use crate::core::project::assert_script_configured;
 use crate::error::CrspError;
+use crate::i18n;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, Ui};
 
@@ -152,23 +153,25 @@ pub fn format_entry(
     ))
 }
 
-/// The per-poll collaborators (client, project, print mode, and state) so
-/// the poll/watch entry points stay small.
-pub struct LogPoller<'a, W: Write, E: Write> {
+/// The per-poll collaborators (client, project, print mode, spinner, and
+/// state) so the poll/watch entry points stay small.
+pub struct LogPoller<'a, A: PromptAdapter, W: Write, E: Write> {
     client: &'a ApiClient,
     project_id: &'a str,
     simplified: bool,
     json: bool,
+    spinner: Option<&'a Ui<A>>,
     state: &'a mut PollState,
     output: &'a mut Output<W, E>,
 }
 
-impl<'a, W: Write, E: Write> LogPoller<'a, W, E> {
+impl<'a, A: PromptAdapter, W: Write, E: Write> LogPoller<'a, A, W, E> {
     pub fn new(
         client: &'a ApiClient,
         project_id: &'a str,
         simplified: bool,
         json: bool,
+        spinner: Option<&'a Ui<A>>,
         state: &'a mut PollState,
         output: &'a mut Output<W, E>,
     ) -> Self {
@@ -177,6 +180,7 @@ impl<'a, W: Write, E: Write> LogPoller<'a, W, E> {
             project_id,
             simplified,
             json,
+            spinner,
             state,
             output,
         }
@@ -192,12 +196,25 @@ impl<'a, W: Write, E: Write> LogPoller<'a, W, E> {
             .as_deref()
             .map(|since| format!("timestamp >= \"{since}\""))
             .unwrap_or_default();
-        let entries = self
-            .client
-            .logging()
-            .list_entries(self.project_id, &filter)
-            .await?
-            .results;
+        let entries = match self.spinner {
+            Some(ui) => {
+                let client = self.client;
+                let project_id = self.project_id;
+                let outcome = ui.with_spinner(i18n::FETCHING_LOGS, move || {
+                    crate::ui::drive_isolated(async move {
+                        client.logging().list_entries(project_id, &filter).await
+                    })
+                })?;
+                outcome?.results
+            }
+            None => {
+                self.client
+                    .logging()
+                    .list_entries(self.project_id, &filter)
+                    .await?
+                    .results
+            }
+        };
         let offset = local_utc_offset();
         // clasp: `entries.results.reverse().forEach(...)`.
         for entry in entries.iter().rev() {
@@ -261,6 +278,7 @@ pub async fn tail_logs<A: PromptAdapter, O: UrlOpener>(
         &project_id,
         args.simplified,
         output.is_json(),
+        Some(ui),
         &mut state,
         output,
     );

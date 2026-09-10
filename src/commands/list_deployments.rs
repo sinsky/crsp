@@ -15,18 +15,23 @@ use crate::core::project::assert_script_configured;
 use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, Ui};
 
-pub async fn list_deployments(
+pub async fn list_deployments<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
     script_id: Option<&str>,
+    ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<Vec<Deployment>, CrspError> {
     let script_id = match script_id {
         Some(script_id) => script_id.to_string(),
         None => assert_script_configured(config).await?.to_string(),
     };
-    let deployments = client.script().list_deployments(&script_id).await?.results;
+    let outcome = ui.with_spinner(i18n::FETCHING_DEPLOYMENTS, move || {
+        crate::ui::drive_isolated(async move { client.script().list_deployments(&script_id).await })
+    })?;
+    let deployments = (outcome?).results;
     if output.is_json() {
         let entries: Vec<_> = deployments.iter().map(DeploymentJson::of).collect();
         output.print_json(&entries)?;

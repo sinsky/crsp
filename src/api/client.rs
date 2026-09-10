@@ -215,6 +215,13 @@ impl ApiClient {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            // Spinner-wrapped calls are driven on a separate Tokio runtime
+            // (see `Ui::drive_isolated`), so a pool connection established on
+            // the ambient runtime could be re-driven on the spinner runtime.
+            // Disabling idle reuse makes every request open a fresh
+            // connection on the driving runtime, keeping the transport
+            // consistent regardless of which runtime drives it.
+            .pool_max_idle_per_host(0)
             .build()
             .map_err(|error| {
                 CrspError::Config(format!("Failed to initialize HTTP client: {error}"))

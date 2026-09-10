@@ -14,6 +14,7 @@ use crate::core::project::list_scripts as fetch_scripts;
 use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
+use crate::ui::{PromptAdapter, Ui};
 
 /// `--json` entry (clasp `{id, name}`).
 #[derive(Serialize)]
@@ -24,12 +25,16 @@ struct ScriptJson<'a> {
     name: Option<&'a str>,
 }
 
-pub async fn list_scripts(
+pub async fn list_scripts<A: PromptAdapter>(
     client: &ApiClient,
     no_shorten: bool,
+    ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<Vec<DriveFile>, CrspError> {
-    let files = fetch_scripts(client).await?.results;
+    let outcome = ui.with_spinner(i18n::FINDING_YOUR_SCRIPTS, move || {
+        crate::ui::drive_isolated(async move { fetch_scripts(client).await })
+    })?;
+    let files = (outcome?).results;
     if output.is_json() {
         let entries: Vec<_> = files
             .iter()

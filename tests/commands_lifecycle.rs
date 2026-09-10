@@ -603,6 +603,7 @@ async fn create_standalone_webapp_shows_deployment_tip() {
             root_dir: None,
             cwd: &cwd,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -648,6 +649,7 @@ async fn create_api_type_shows_api_tip() {
             root_dir: None,
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -679,6 +681,7 @@ async fn create_unknown_type_lists_valid_values() {
             root_dir: None,
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -714,6 +717,7 @@ async fn create_container_docs_creates_drive_file_then_script() {
             root_dir: None,
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -771,6 +775,7 @@ async fn create_container_sheets_uses_spreadsheet_mime_and_json() {
             root_dir: None,
             cwd: &cwd,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -812,6 +817,7 @@ async fn create_standalone_json_omits_parent_id() {
             root_dir: None,
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -845,6 +851,7 @@ async fn create_existing_project_is_rejected() {
             root_dir: None,
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -871,6 +878,7 @@ async fn create_root_dir_escape_is_rejected_before_type_check() {
             root_dir: Some("../escape"),
             cwd: temp.path(),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1051,9 +1059,15 @@ async fn list_versions_human_is_reversed() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_versions(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    list_versions(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "Found 3 versions.\n3 - third\n2 - No description\n1 - first\n"
@@ -1073,9 +1087,15 @@ async fn list_versions_json_preserves_raw_api_order() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(true, &mut out, Vec::new());
-    list_versions(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    list_versions(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "[\n  {\n    \"versionNumber\": 1,\n    \"description\": \"first\"\n  },\n  \
@@ -1097,9 +1117,15 @@ async fn list_versions_empty_message() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let versions = list_versions(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    let versions = list_versions(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert!(versions.is_empty());
     assert_eq!(
         String::from_utf8(out).unwrap(),
@@ -1120,9 +1146,15 @@ async fn list_versions_explicit_script_id_overrides_config() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_versions(&client, &config, Some("other"), &mut output)
-        .await
-        .unwrap();
+    list_versions(
+        &client,
+        &config,
+        Some("other"),
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     let requests = received(&server).await;
     assert!(url_of(&requests[0]).contains("/v1/projects/other/versions"));
 }
@@ -1160,6 +1192,7 @@ async fn deploy_without_version_creates_version_then_deployment() {
             description: Some("my deploy"),
             deployment_id: None,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1207,6 +1240,7 @@ async fn deploy_explicit_version_skips_version_creation() {
             description: None,
             deployment_id: None,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1251,6 +1285,7 @@ async fn deploy_with_deployment_id_updates_it() {
             description: Some("redep"),
             deployment_id: Some("dep1"),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1298,6 +1333,7 @@ async fn deploy_head_response_prints_head() {
             description: None,
             deployment_id: None,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1324,6 +1360,7 @@ async fn deploy_invalid_version_argument_is_rejected() {
             description: None,
             deployment_id: None,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1361,6 +1398,7 @@ async fn redeploy_without_version_creates_version_then_updates() {
             version_number: None,
             description: None,
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1407,6 +1445,7 @@ async fn redeploy_json_prints_deployment_fields() {
             version_number: Some("8"),
             description: Some("updated"),
         },
+        &Ui::new(TestPrompt::default()),
         &mut output,
     )
     .await
@@ -1669,9 +1708,15 @@ async fn list_deployments_human_lines_and_json() {
 
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_deployments(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    list_deployments(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "Found 3 deployments.\n- dep1 @2 - v2\n- dep2 @HEAD \n- dep3 @5 - v5\n"
@@ -1679,9 +1724,15 @@ async fn list_deployments_human_lines_and_json() {
 
     let mut out = Vec::new();
     let mut output = Output::new(true, &mut out, Vec::new());
-    list_deployments(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    list_deployments(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "[\n  {\n    \"deploymentId\": \"dep1\",\n    \"versionNumber\": 2,\n    \"description\": \"v2\"\n  },\n  \
@@ -1703,9 +1754,15 @@ async fn list_deployments_empty_message() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_deployments(&client, &config, None, &mut output)
-        .await
-        .unwrap();
+    list_deployments(
+        &client,
+        &config,
+        None,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     assert_eq!(String::from_utf8(out).unwrap(), "No deployments.\n");
 }
 
@@ -1739,7 +1796,9 @@ async fn list_scripts_truncates_names_to_twenty_chars() {
     let client = api_client(&server.uri());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_scripts(&client, false, &mut output).await.unwrap();
+    list_scripts(&client, false, &Ui::new(TestPrompt::default()), &mut output)
+        .await
+        .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "Found 4 scripts.\n\
@@ -1757,7 +1816,9 @@ async fn list_scripts_no_shorten_prints_raw_names() {
     let client = api_client(&server.uri());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_scripts(&client, true, &mut output).await.unwrap();
+    list_scripts(&client, true, &Ui::new(TestPrompt::default()), &mut output)
+        .await
+        .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "Found 4 scripts.\n\
@@ -1775,7 +1836,9 @@ async fn list_scripts_json_prints_raw_entries() {
     let client = api_client(&server.uri());
     let mut out = Vec::new();
     let mut output = Output::new(true, &mut out, Vec::new());
-    list_scripts(&client, false, &mut output).await.unwrap();
+    list_scripts(&client, false, &Ui::new(TestPrompt::default()), &mut output)
+        .await
+        .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "[\n  {\n    \"id\": \"s1\",\n    \"name\": \"script 1\"\n  },\n  \
@@ -1796,7 +1859,9 @@ async fn list_scripts_empty_message() {
     let client = api_client(&server.uri());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    list_scripts(&client, false, &mut output).await.unwrap();
+    list_scripts(&client, false, &Ui::new(TestPrompt::default()), &mut output)
+        .await
+        .unwrap();
     assert_eq!(String::from_utf8(out).unwrap(), "No script files found.\n");
 }
 

@@ -745,9 +745,14 @@ async fn status_compresses_untracked_files_to_common_parent() {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(true, &mut out, &mut err);
-    show_file_status(temp.path(), &config(temp.path()), &mut output)
-        .await
-        .unwrap();
+    show_file_status(
+        temp.path(),
+        &config(temp.path()),
+        &Ui::new(crsp::ui::DemandAdapter),
+        &mut output,
+    )
+    .await
+    .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert!(
         json["untrackedFiles"]
@@ -938,9 +943,14 @@ async fn status_paths_are_cwd_relative_like_clasp() {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(false, &mut out, &mut err);
-    show_file_status(temp.path(), &src_config(temp.path()), &mut output)
-        .await
-        .unwrap();
+    show_file_status(
+        temp.path(),
+        &src_config(temp.path()),
+        &Ui::new(crsp::ui::DemandAdapter),
+        &mut output,
+    )
+    .await
+    .unwrap();
     let stdout = String::from_utf8(out).unwrap();
     assert!(
         stdout.contains("└─ src/appsscript.json") && stdout.contains("└─ src/Code.js"),

@@ -2,13 +2,20 @@
 
 use std::cell::{Cell, RefCell};
 use std::io::{self, IsTerminal};
+use std::path::Path;
 
+use crsp::api::{ApiClient, ApiClientConfig};
+use crsp::core::config::ProjectConfig;
 use crsp::error::CrspError;
 use crsp::text::humanize_title;
 use crsp::ui::{
     DemandAdapter, PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect,
     PromptSelect, PromptSpinner, Ui,
 };
+use serde_json::json;
+use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[derive(Default)]
 struct FakeAdapter {
@@ -314,4 +321,76 @@ fn demand_adapter_reports_non_interactive_in_captured_tests() {
         return;
     }
     assert!(!DemandAdapter.is_interactive());
+}
+
+// ---------------------------------------------------------------------------
+// §2.1 spinner message wiring: a TTY-interactive adapter must receive the
+// command's spinner message around each wrapped service call.
+// ---------------------------------------------------------------------------
+
+fn configured_config(root: &Path) -> ProjectConfig {
+    ProjectConfig {
+        config_file_path: root.join(".clasp.json"),
+        project_root_dir: root.to_path_buf(),
+        content_dir: root.to_path_buf(),
+        script_id: Some("script".to_string()),
+        project_id: None,
+        parent_id: None,
+        file_push_order: Vec::new(),
+        script_extensions: vec![".js".to_string(), ".gs".to_string()],
+        html_extensions: vec![".html".to_string()],
+        json_extensions: vec![".json".to_string()],
+        skip_subdirectories: false,
+        allow_symlinks: false,
+        ignore_file_path: None,
+    }
+}
+
+fn api_client(base: &str) -> ApiClient {
+    let refresh: crsp::api::RefreshFn =
+        std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
+    ApiClient::with_base_urls(
+        ApiClientConfig::new("token", refresh),
+        crsp::api::BaseUrls {
+            script: base.to_string(),
+            drive: base.to_string(),
+            service_usage: base.to_string(),
+            discovery: base.to_string(),
+            logging: base.to_string(),
+            oauth2: base.to_string(),
+            userinfo: base.to_string(),
+        },
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn list_versions_shows_the_spinner_message_on_an_interactive_adapter() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/versions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "versions": [
+                {"versionNumber": 1, "description": "first"},
+                {"versionNumber": 2},
+                {"versionNumber": 3, "description": "third"},
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let config = configured_config(temp.path());
+    let mut out = Vec::new();
+    let mut output = crsp::output::Output::new(false, &mut out, Vec::new());
+    let ui = Ui::new(FakeAdapter::interactive());
+    crsp::commands::list_versions::list_versions(&client, &config, None, &ui, &mut output)
+        .await
+        .unwrap();
+    let adapter = ui.into_adapter();
+    assert_eq!(
+        adapter.spinner_starts.borrow().clone(),
+        vec!["Fetching versions...".to_string()]
+    );
+    assert_eq!(adapter.spinner_stops.get(), 1);
 }
