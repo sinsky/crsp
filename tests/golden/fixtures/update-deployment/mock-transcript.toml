@@ -1,0 +1,5 @@
+[[request]]
+method = "PUT"
+path = "/v1/projects/script/deployments/dep1"
+status = 200
+body_json = '''{"deploymentId":"dep1","deploymentConfig":{"description":"upd","versionNumber":5}}'''

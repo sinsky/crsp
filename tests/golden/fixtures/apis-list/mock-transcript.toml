@@ -1,0 +1,14 @@
+[[request]]
+method = "GET"
+path = "/v1/projects/gcp-project/services"
+status = 200
+times = 2
+query = { filter = "state:ENABLED", pageSize = "200" }
+body_json = '''{"services":[{"name":"projects/p/services/drive.googleapis.com","state":"ENABLED","config":{"name":"drive.googleapis.com","documentation":{"summary":"Access files in Drive."}}}]}'''
+[[request]]
+method = "GET"
+path = "/discovery/v1/apis"
+status = 200
+times = 2
+query = { preferred = "true" }
+body_json = '''{"items":[{"id":"drive:v2","name":"drive","title":"Drive API","description":"Access Drive.","preferred":true,"discoveryRestUrl":"https://www.googleapis.com/discovery/v1/apis/drive/v2/rest"},{"id":"sheets:v4","name":"sheets","title":"Sheets API","description":"Read/write sheets.","preferred":true,"discoveryRestUrl":"https://sheets.googleapis.com/$discovery/rest?version=v4"}]}'''

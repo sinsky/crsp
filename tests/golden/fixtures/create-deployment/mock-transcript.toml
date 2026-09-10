@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v1/projects/script/deployments"
+status = 200
+body_json = '''{"deploymentId":"RWA-xyz","deploymentConfig":{"description":"ship","versionNumber":4}}'''

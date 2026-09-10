@@ -1,0 +1,5 @@
+[[request]]
+method = "GET"
+path = "/v2/userinfo"
+status = 200
+body_json = '''{"id":"u1","email":"user@example.com"}'''

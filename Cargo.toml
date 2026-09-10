@@ -52,6 +52,7 @@ rmcp = { version = "3.2", features = ["server", "client", "macros", "transport-i
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+toml = "0.8"
 wiremock = "0.6"
 
 [profile.release]

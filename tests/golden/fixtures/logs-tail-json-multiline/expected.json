@@ -1,0 +1,22 @@
+{
+  "command": [
+    "tail-logs",
+    "--json"
+  ],
+  "env": {},
+  "stdout": "DEBUG                2026-01-01T01:00:00 doStuff         {\n  \"insertId\": \"i2\",\n  \"severity\": \"DEBUG\",\n  \"timestamp\": \"2026-01-01T01:00:00Z\",\n  \"jsonPayload\": {\n    \"message\": \"hi from json\"\n  },\n  \"resource\": {\n    \"labels\": {\n      \"function_name\": \"doStuff\",\n      \"project_id\": \"p\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"projectId\": \"gcp-project\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/Code.js": "// hello\n",
+    "project/src/appsscript.json": "{\n  \"timeZone\": \"America/New_York\",\n  \"exceptionLogging\": \"STACKDRIVER\"\n}\n"
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/v2/entries:list"
+    }
+  ]
+}

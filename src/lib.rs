@@ -128,21 +128,31 @@ async fn run_logout(cli: &Cli, context: &std::sync::Arc<Clasp>) -> Result<(), Cr
 async fn run_show_user(cli: &Cli, context: &std::sync::Arc<Clasp>) -> Result<(), CrspError> {
     let store = &context.store;
     let credentials = context.credentials.clone();
+    // T4 golden-subprocess contract: the userinfo endpoint follows the
+    // CRSP_*_BASE_URL overrides (production URLs remain the defaults).
+    let endpoints =
+        crate::auth::oauth_client::AuthEndpoints::from_base_urls(&crate::api::BaseUrls::from_env());
     let payload = show_authorized_user(
         credentials,
         Some(store),
         &cli.globals.user,
         &reqwest::Client::new(),
-        &AuthEndpoints::default(),
+        &endpoints,
     )
     .await?;
     let mut output = Output::stdout(cli.globals.json);
     if output.is_json() {
         output.print_json(&payload)?;
     } else if payload.logged_in {
-        output.message(&format!(
-            "Logged in as {}.",
-            payload.email.unwrap_or_default()
+        // clasp show-authorized-user.ts:75-99: the email-unknown branch and
+        // the client-ID line.
+        match payload.email.as_deref() {
+            Some(email) => output.message(&crate::i18n::logged_in_as(email)),
+            None => output.message(crate::i18n::LOGGED_IN_UNKNOWN_USER),
+        }
+        output.message(&crate::i18n::oauth_client_line(
+            payload.client_id.as_deref(),
+            payload.client_type.map(|kind| kind.as_str()),
         ));
     } else {
         output.message("Not logged in.");
@@ -195,6 +205,7 @@ async fn run_command(
             crate::commands::push::push(
                 &context.client,
                 &config,
+                &cwd,
                 args.force,
                 args.watch,
                 &ui,
@@ -220,9 +231,9 @@ async fn run_command(
             )
             .await?;
             crate::commands::pull::pull(
-                &context.client,
                 &config,
-                &remote.iter().map(|f| f.file.clone()).collect::<Vec<_>>(),
+                &cwd,
+                &remote,
                 args.delete_unused_files,
                 args.force,
                 &ui,
@@ -347,7 +358,7 @@ async fn run_command(
             crate::commands::setup_logs::setup_logs(&mut config, &ui, &opener, &mut output).await?;
         }
         Commands::ShowFileStatus => {
-            crate::commands::show_file_status::show_file_status(&config, &mut output).await?;
+            crate::commands::show_file_status::show_file_status(&cwd, &config, &mut output).await?;
         }
         Commands::ListApis => {
             crate::commands::list_apis::list_apis(

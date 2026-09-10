@@ -108,6 +108,7 @@ async fn push_zero_changed_issues_no_put_and_prints_up_to_date() {
     let result = push_command(
         &client,
         &config(temp.path()),
+        temp.path(),
         true,
         false,
         &Ui::new(TestPrompt::default()),
@@ -153,6 +154,7 @@ async fn push_changed_puts_all_files_with_normalized_names_and_manifest_json() {
     push_command(
         &api_client(&server.uri()),
         &config(temp.path()),
+        temp.path(),
         true,
         false,
         &Ui::new(TestPrompt::default()),
@@ -531,7 +533,6 @@ async fn pull_deletion_force_and_confirm_paths_report_deleted_files() {
     let src = temp.path().join("src");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("old.js"), "old").unwrap();
-    let remote = vec![PullFile::new("new", "SERVER_JS", "new")];
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(true, &mut out, &mut err);
@@ -540,9 +541,9 @@ async fn pull_deletion_force_and_confirm_paths_report_deleted_files() {
         answer: true,
     });
     let result = pull_command(
-        &api_client("http://127.0.0.1:1"),
         &config(temp.path()),
-        &remote,
+        temp.path(),
+        &[],
         true,
         false,
         &ui,
@@ -565,8 +566,8 @@ async fn pull_noninteractive_deletion_warns_and_preserves_files() {
     let mut err = Vec::new();
     let mut output = Output::new(false, &mut out, &mut err);
     let result = pull_command(
-        &api_client("http://127.0.0.1:1"),
         &config(temp.path()),
+        temp.path(),
         &[],
         true,
         false,
@@ -602,6 +603,7 @@ async fn noninteractive_manifest_change_is_rejected_before_put() {
     let result = push_command(
         &api_client(&server.uri()),
         &config(temp.path()),
+        temp.path(),
         false,
         false,
         &Ui::new(TestPrompt::default()),
@@ -743,7 +745,7 @@ async fn status_compresses_untracked_files_to_common_parent() {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(true, &mut out, &mut err);
-    show_file_status(&config(temp.path()), &mut output)
+    show_file_status(temp.path(), &config(temp.path()), &mut output)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
@@ -752,7 +754,9 @@ async fn status_compresses_untracked_files_to_common_parent() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|item| item == "node_modules/")
+            .any(|item| item == "src/node_modules/"),
+        "clasp collapses to the nearest untracked parent (cwd-relative): {:?}",
+        json["untrackedFiles"]
     );
 }
 
@@ -787,5 +791,290 @@ fn remote_names_use_forward_slashes_in_local_and_payload_models() {
     assert_eq!(
         PathBuf::from("nested/Code.gs").to_string_lossy(),
         "nested/Code.gs"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// clasp display parity (clasp commands/pull.ts, push.ts, show-file-status.ts,
+// core/files.ts cwd-relative localPath; golden-gate divergence fixes)
+// ---------------------------------------------------------------------------
+
+fn src_config(root: &Path) -> ProjectConfig {
+    let mut configured = config(root);
+    configured.content_dir = root.join("src");
+    configured
+}
+
+#[tokio::test]
+async fn push_json_no_change_prints_empty_array_like_clasp() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"files":[{"name":"Code","type":"SERVER_JS","source":"same"}]}),
+        ))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Code.js"), "same").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    push_command(
+        &api_client(&server.uri()),
+        &src_config(temp.path()),
+        temp.path(),
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp push.ts: JSON with no pending changes prints an empty array, not
+    // the human up-to-date line.
+    assert_eq!(String::from_utf8(out).unwrap(), "[]\n");
+}
+
+#[tokio::test]
+async fn push_success_prints_pushed_line_and_cwd_relative_files() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"files":[{"name":"Code","type":"SERVER_JS","source":"old"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Code.js"), "new").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    push_command(
+        &api_client(&server.uri()),
+        &src_config(temp.path()),
+        temp.path(),
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp push.ts: `Pushed {count, plural, ...} at {time}.` plus one
+    // `└─ {cwd-relative path}` line per file.
+    let stdout = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "stdout: {stdout:?}");
+    assert!(
+        lines[0].starts_with("Pushed one file at ") && lines[0].ends_with('.'),
+        "first line: {}",
+        lines[0]
+    );
+    let timestamp = lines[0]["Pushed one file at ".len()..lines[0].len() - 1].to_string();
+    assert!(
+        regex::Regex::new(r"^\d{1,2}:\d{2}:\d{2} (AM|PM)$")
+            .unwrap()
+            .is_match(&timestamp),
+        "clasp `toLocaleTimeString()` en-US style: {timestamp:?}"
+    );
+    assert_eq!(lines[1], "└─ src/Code.js");
+}
+
+#[tokio::test]
+async fn push_json_lists_cwd_relative_paths() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"files":[{"name":"Code","type":"SERVER_JS","source":"old"}]}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Code.js"), "new").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    push_command(
+        &api_client(&server.uri()),
+        &src_config(temp.path()),
+        temp.path(),
+        true,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "[\n  \"src/Code.js\"\n]\n");
+}
+
+#[tokio::test]
+async fn status_paths_are_cwd_relative_like_clasp() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(src.join("node_modules/lib")).unwrap();
+    fs::write(src.join("Code.js"), "code").unwrap();
+    fs::write(src.join("appsscript.json"), "{}").unwrap();
+    fs::write(src.join("node_modules/lib/a.txt"), "a").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    show_file_status(temp.path(), &src_config(temp.path()), &mut output)
+        .await
+        .unwrap();
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(
+        stdout.contains("└─ src/appsscript.json") && stdout.contains("└─ src/Code.js"),
+        "cwd-relative display (clasp `path.relative(cwd, …)`): {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("└─ appsscript.json"),
+        "contentDir-relative display is wrong: {stdout:?}"
+    );
+}
+
+#[tokio::test]
+async fn pull_prints_files_and_pulled_count_like_clasp() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "files": [
+                {"name": "Code", "type": "SERVER_JS", "source": "// hello\n"},
+                {"name": "appsscript", "type": "JSON", "source": "{}"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join(".clasp.json"),
+        "{\"scriptId\":\"script\",\"rootDir\":\"src\"}",
+    )
+    .unwrap();
+    let remote: Vec<crsp::core::project::RemoteFile> = vec![
+        crsp::core::project::RemoteFile {
+            file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+            local_path: "src/Code.js".to_string(),
+        },
+        crsp::core::project::RemoteFile {
+            file: PullFile::new("appsscript", "JSON", "{}"),
+            local_path: "src/appsscript.json".to_string(),
+        },
+    ];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "└─ src/Code.js\n└─ src/appsscript.json\nPulled 2 files.\n"
+    );
+}
+
+#[tokio::test]
+async fn pull_delete_prints_deleted_lines_and_cwd_relative_paths() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "files": [{"name": "Code", "type": "SERVER_JS", "source": "// hello\n"}]
+        })))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("Unused.js"), "unused").unwrap();
+    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
+        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+        local_path: "src/Code.js".to_string(),
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        true,
+        true,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp pull.ts: the Deleted line comes from the unused-file sweep before
+    // the pulled-file listing.
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Deleted src/Unused.js\n└─ src/Code.js\nPulled one file.\n"
+    );
+    assert!(!src.join("Unused.js").exists());
+}
+
+#[tokio::test]
+async fn pull_json_lists_cwd_relative_pulled_files() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "files": [{"name": "Code", "type": "SERVER_JS", "source": "// hello\n"}]
+        })))
+        .mount(&server)
+        .await;
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
+        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+        local_path: "src/Code.js".to_string(),
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "{\n  \"pulledFiles\": [\n    \"src/Code.js\"\n  ],\n  \"deletedFiles\": []\n}\n"
     );
 }

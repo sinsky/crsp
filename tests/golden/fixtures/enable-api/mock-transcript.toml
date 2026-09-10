@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v1/projects/gcp-project/services/sheets.googleapis.com:enable"
+status = 200
+body_json = '''{"name":"projects/p/services/sheets.googleapis.com","state":"ENABLED"}'''

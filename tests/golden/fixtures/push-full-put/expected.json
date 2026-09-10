@@ -1,0 +1,39 @@
+{
+  "command": [
+    "push"
+  ],
+  "env": {},
+  "stdout": "Pushed 2 files at <TIME>.\n\u2514\u2500 src/appsscript.json\n\u2514\u2500 src/Code.js\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/appsscript.json": "{\"timeZone\":\"America/New_York\",\"exceptionLogging\":\"STACKDRIVER\"}",
+    "project/src/Code.js": "// changed\n"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v1/projects/script/content"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/projects/script/content",
+      "body": {
+        "files": [
+          {
+            "name": "appsscript",
+            "type": "JSON",
+            "source": "{\"timeZone\":\"America/New_York\",\"exceptionLogging\":\"STACKDRIVER\"}"
+          },
+          {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": "// changed\n"
+          }
+        ]
+      }
+    }
+  ]
+}

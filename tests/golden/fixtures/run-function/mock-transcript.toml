@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v1/scripts/script/run"
+status = 200
+body_json = '''{"done":true,"response":{"result":42}}'''

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "run-function",
+    "myFunc",
+    "--json"
+  ],
+  "env": {},
+  "stdout": "{\n  \"error\": {\n    \"code\": 403,\n    \"message\": \"Script function not found: myFunc\",\n    \"details\": [\n      {\n        \"errorType\": \"SCRIPT_ERROR\",\n        \"errorMessage\": \"myFunc is not defined\",\n        \"scriptStackTraceElements\": [\n          {\n            \"function\": \"myFunc\",\n            \"lineNumber\": 3\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n"
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/v1/scripts/script/run"
+    }
+  ]
+}

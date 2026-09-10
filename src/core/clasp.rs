@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::api::{ApiClient, ApiClientConfig, RefreshFn};
-use crate::auth::oauth_client::{AuthEndpoints, OAuthClient};
+use crate::auth::oauth_client::OAuthClient;
 use crate::auth::{CredentialStore, StoredCredentials, load_credentials, refresh_and_save};
 use crate::core::config::ProjectConfig;
 use crate::error::CrspError;
@@ -58,10 +58,7 @@ impl Clasp {
                 .is_some_and(|expiry| expiry <= now_millis())
             && current.refresh_token.is_some()
         {
-            let client = OAuthClient {
-                endpoints: AuthEndpoints::default(),
-                ..OAuthClient::default_client()
-            };
+            let client = env_oauth_client();
             credentials = Some(
                 refresh_and_save(&client, current, &store, user, &reqwest::Client::new()).await?,
             );
@@ -82,7 +79,7 @@ impl Clasp {
             Box::pin(async move {
                 let credentials = credentials
                     .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))?;
-                let client = OAuthClient::default_client();
+                let client = env_oauth_client();
                 let refreshed = refresh_and_save(
                     &client,
                     &credentials,
@@ -108,6 +105,16 @@ impl Clasp {
             user: user.to_string(),
         }))
     }
+}
+
+/// The default OAuth client with the runtime/golden base-URL overrides
+/// (T4 contract): the token endpoint follows `CRSP_OAUTH2_BASE_URL` /
+/// `CRSP_API_BASE_URL`; production URLs remain the defaults.
+fn env_oauth_client() -> OAuthClient {
+    OAuthClient::default_client().with_token_url(crate::api::client::service_url(
+        &crate::api::BaseUrls::from_env().oauth2,
+        "/token",
+    ))
 }
 
 fn auth_path(auth: Option<&Path>) -> Result<PathBuf, CrspError> {

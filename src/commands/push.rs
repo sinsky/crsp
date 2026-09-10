@@ -85,6 +85,7 @@ fn event_paths(event: notify::Result<notify::Event>) -> Result<Vec<PathBuf>, Crs
 pub async fn push<A: PromptAdapter>(
     client: &ApiClient,
     config: &ProjectConfig,
+    cwd: &Path,
     mut force: bool,
     watch: bool,
     ui: &Ui<A>,
@@ -108,7 +109,7 @@ pub async fn push<A: PromptAdapter>(
         force = true;
     }
     put_push_files(client, config, &result).await?;
-    print_result(&result, output)?;
+    print_result(cwd, config, &result, output)?;
     if !watch {
         return Ok(result);
     }
@@ -158,7 +159,7 @@ pub async fn push<A: PromptAdapter>(
                     *force_state.lock().unwrap() = true;
                 }
                 put_push_files(client_ref, config_ref, &next).await?;
-                print_result(&next, *output_ref.borrow_mut())?;
+                print_result(cwd, config_ref, &next, *output_ref.borrow_mut())?;
                 Ok(true)
             })
         },
@@ -167,20 +168,60 @@ pub async fn push<A: PromptAdapter>(
     Ok(result)
 }
 
+/// clasp push.ts `new Date().toLocaleTimeString()` (en-US default ICU
+/// rendering: 12-hour `h:mm:ss AM/PM` in the process-local timezone).
+pub fn format_push_time(offset: time::UtcOffset) -> String {
+    let now = time::OffsetDateTime::now_utc().to_offset(offset);
+    let (hour, suffix) = match now.hour() {
+        0 => (12, "AM"),
+        12 => (12, "PM"),
+        hour if hour < 12 => (hour, "AM"),
+        hour => (hour - 12, "PM"),
+    };
+    format!("{hour}:{:02}:{:02} {suffix}", now.minute(), now.second())
+}
+
 fn print_result(
+    cwd: &Path,
+    config: &ProjectConfig,
     result: &PushResult,
     output: &mut Output<impl std::io::Write, impl std::io::Write>,
 ) -> Result<(), CrspError> {
     if result.up_to_date {
-        output.message("Script is already up to date.");
-    } else if output.is_json() {
-        output.print_json(
-            &result
-                .files
-                .iter()
-                .map(|file| file.local_path.clone())
-                .collect::<Vec<_>>(),
-        )?;
+        // clasp push.ts:100-106: JSON mode prints an empty array for no
+        // pending changes; human mode prints the up-to-date line.
+        if output.is_json() {
+            output.print_json(&Vec::<String>::new())?;
+        } else {
+            output.message("Script is already up to date.");
+        }
+        return Ok(());
+    }
+    // clasp push.ts: JSON mode prints the pushed paths; human mode prints
+    // `Pushed {count} files at {toLocaleTimeString()}.` plus one
+    // `└─ {cwd-relative path}` line per file (files.ts cwd-relative
+    // `localPath`).
+    let display_paths: Vec<String> = result
+        .files
+        .iter()
+        .map(|file| {
+            crate::commands::show_file_status::cwd_relative(
+                cwd,
+                &config.content_dir,
+                &file.local_path,
+            )
+        })
+        .collect();
+    if output.is_json() {
+        output.print_json(&display_paths)?;
+    } else {
+        output.message(&crate::i18n::pushed_files(
+            result.files.len(),
+            &format_push_time(crate::commands::tail_logs::local_utc_offset()),
+        ));
+        for path in &display_paths {
+            output.message(&format!("└─ {path}"));
+        }
     }
     Ok(())
 }

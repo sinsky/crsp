@@ -1,0 +1,350 @@
+{
+  "command": [
+    "start-mcp-server"
+  ],
+  "env": {},
+  "stdout": "",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/appsscript.json": "{\n  \"timeZone\": \"America/New_York\",\n  \"exceptionLogging\": \"STACKDRIVER\"\n}\n",
+    "project/src/Code.js": "// hello\n"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v1/projects/script/content"
+    }
+  ],
+  "mcp_steps": [
+    {
+      "send": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2024-11-05\", \"capabilities\": {}, \"clientInfo\": {\"name\": \"golden\", \"version\": \"1\"}}}",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {
+            "tools": {}
+          },
+          "serverInfo": {
+            "name": "Crsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "send": "{\"jsonrpc\": \"2.0\", \"id\": 2, \"method\": \"tools/list\", \"params\": {}}",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "tools": [
+            {
+              "name": "clone_project",
+              "description": "Clones and pulls an existing Apps Script project to a local directory.",
+              "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "required": [
+                  "projectDir"
+                ],
+                "type": "object",
+                "properties": {
+                  "projectDir": {
+                    "description": "The local directory where the Apps Script project will be created.",
+                    "type": "string"
+                  },
+                  "sourceDir": {
+                    "description": "Local directory relative to projectDir where the Apps Script source files are located. If not specified, files are placed in the project directory.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scriptId": {
+                    "description": "ID of the Apps Script project to clone.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "FilesOutput",
+                "type": "object",
+                "properties": {
+                  "scriptId": {
+                    "type": "string"
+                  },
+                  "projectDir": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "scriptId",
+                  "projectDir",
+                  "files"
+                ]
+              },
+              "annotations": {
+                "title": "Clone Apps Script project",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "create_project",
+              "description": "Create a new apps script project.",
+              "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "required": [
+                  "projectDir"
+                ],
+                "type": "object",
+                "properties": {
+                  "projectDir": {
+                    "description": "The local directory where the Apps Script project will be created.",
+                    "type": "string"
+                  },
+                  "sourceDir": {
+                    "description": "Local directory relative to projectDir where the Apps Script source files are located. If not specified, files are placed in the project directory.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "projectName": {
+                    "description": "Name of the project. If not provided, the project name will be inferred from the directory.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "FilesOutput",
+                "type": "object",
+                "properties": {
+                  "scriptId": {
+                    "type": "string"
+                  },
+                  "projectDir": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "scriptId",
+                  "projectDir",
+                  "files"
+                ]
+              },
+              "annotations": {
+                "title": "Create Apps Script project",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "list_projects",
+              "description": "List Apps Script projects",
+              "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object"
+              },
+              "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "ScriptsOutput",
+                "type": "object",
+                "properties": {
+                  "scripts": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/ScriptOutput"
+                    }
+                  }
+                },
+                "required": [
+                  "scripts"
+                ],
+                "$defs": {
+                  "ScriptOutput": {
+                    "type": "object",
+                    "properties": {
+                      "scriptId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "scriptId",
+                      "name"
+                    ]
+                  }
+                }
+              },
+              "annotations": {
+                "title": "List Apps Script projects",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "pull_files",
+              "description": "Pulls files from Apps Script project to local file system.",
+              "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "required": [
+                  "projectDir"
+                ],
+                "type": "object",
+                "properties": {
+                  "projectDir": {
+                    "description": "The local directory of the Apps Script project to update. Must contain a .clasp.json file containing the project info.",
+                    "type": "string"
+                  }
+                }
+              },
+              "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "FilesOutput",
+                "type": "object",
+                "properties": {
+                  "scriptId": {
+                    "type": "string"
+                  },
+                  "projectDir": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "scriptId",
+                  "projectDir",
+                  "files"
+                ]
+              },
+              "annotations": {
+                "title": "Pull project files from Apps Script",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            },
+            {
+              "name": "push_files",
+              "description": "Pushes the local Apps Script project to the remote server.",
+              "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "required": [
+                  "projectDir"
+                ],
+                "type": "object",
+                "properties": {
+                  "projectDir": {
+                    "description": "The local directory of the Apps Script project to push. Must contain a .clasp.json file containing the project info.",
+                    "type": "string"
+                  }
+                }
+              },
+              "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "FilesOutput",
+                "type": "object",
+                "properties": {
+                  "scriptId": {
+                    "type": "string"
+                  },
+                  "projectDir": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "scriptId",
+                  "projectDir",
+                  "files"
+                ]
+              },
+              "annotations": {
+                "title": "Push project files to Apps Script",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": "{\"jsonrpc\": \"2.0\", \"id\": 3, \"method\": \"tools/call\", \"params\": {\"name\": \"pull_files\", \"arguments\": {\"projectDir\": \"<TMP>\"}}}",
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "Pulled project in <TMP> to local filesystem successfully."
+            },
+            {
+              "type": "text",
+              "text": "Updated file: <TMP>/src/appsscript.json"
+            },
+            {
+              "type": "text",
+              "text": "Updated file: <TMP>/src/Code.js"
+            }
+          ],
+          "structuredContent": {
+            "scriptId": "script",
+            "projectDir": "<TMP>",
+            "files": [
+              "<TMP>/src/appsscript.json",
+              "<TMP>/src/Code.js"
+            ]
+          },
+          "isError": false
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "command": [],
+  "env": {},
+  "stdout": "",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n"
+  },
+  "requests": [],
+  "variants": [
+    {
+      "command": [
+        "list-deployments"
+      ],
+      "stdout": "Found 3 deployments.\n- dep1 @1 - first one\n- dep2 @3 \n",
+      "stderr": "",
+      "exit": 0
+    },
+    {
+      "command": [
+        "list-deployments",
+        "--json"
+      ],
+      "stdout": "[\n  {\n    \"deploymentId\": \"dep1\",\n    \"versionNumber\": 1,\n    \"description\": \"first one\"\n  },\n  {\n    \"deploymentId\": \"dep2\",\n    \"versionNumber\": 3\n  },\n  {\n    \"deploymentId\": \"RWA-HEAD\"\n  }\n]\n",
+      "stderr": "",
+      "exit": 0
+    }
+  ]
+}

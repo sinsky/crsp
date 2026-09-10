@@ -1,0 +1,5 @@
+[[request]]
+method = "PATCH"
+path = "/v3/files/script"
+status = 200
+body_json = '''{"id":"script","trashed":true}'''

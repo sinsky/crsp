@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v1/projects/gcp-project/services/drive.googleapis.com:disable"
+status = 200
+body_json = '''{"name":"projects/p/services/drive.googleapis.com","state":"DISABLED"}'''

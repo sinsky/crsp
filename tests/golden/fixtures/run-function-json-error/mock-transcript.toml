@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v1/scripts/script/run"
+status = 200
+body_json = '''{"done":true,"error":{"code":403,"message":"Script function not found: myFunc","details":[{"errorType":"SCRIPT_ERROR","errorMessage":"myFunc is not defined","scriptStackTraceElements":[{"function":"myFunc","lineNumber":3}]}]}}'''

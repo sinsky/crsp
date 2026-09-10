@@ -153,6 +153,15 @@ pub fn oauth_client_summary(client_id: &str, client_type: &str) -> String {
     format!("OAuth client ID: {client_id} ({client_type}).")
 }
 
+/// clasp `OAuth client ID: {clientId ?? 'unknown'} ({clientType ?? 'unknown'}).`
+/// with both values falling back to `unknown`.
+pub fn oauth_client_line(client_id: Option<&str>, client_type: Option<&str>) -> String {
+    oauth_client_summary(
+        client_id.unwrap_or("unknown"),
+        client_type.unwrap_or("unknown"),
+    )
+}
+
 /// Refresh failure (spec §7.4: keep the old token, prompt `crsp login`;
 /// clasp surfaces the raw Google error without custom wording).
 pub fn refresh_failed(detail: &str) -> String {
@@ -300,6 +309,27 @@ pub fn cloned_files(count: usize) -> String {
         0 => "Cloned no files.".to_string(),
         1 => "Cloned one file.".to_string(),
         other => format!("Cloned {} files.", icu_number(other as i64)),
+    }
+}
+
+/// `Pushed {count, plural, =0 {no files} one {one file} other {# files}} at
+/// {time}.` (clasp push.ts:87-99).
+pub fn pushed_files(count: usize, time: &str) -> String {
+    let count_text = match count {
+        0 => "no files".to_string(),
+        1 => "one file".to_string(),
+        other => format!("{} files", icu_number(other as i64)),
+    };
+    format!("Pushed {count_text} at {time}.")
+}
+
+/// `Pulled {count, plural, =0 {no files.} one {one file.} other {# files}}.`
+/// (clasp pull.ts:113-124).
+pub fn pulled_files(count: usize) -> String {
+    match count {
+        0 => "Pulled no files.".to_string(),
+        1 => "Pulled one file.".to_string(),
+        other => format!("Pulled {} files.", icu_number(other as i64)),
     }
 }
 

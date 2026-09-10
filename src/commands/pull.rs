@@ -1,17 +1,17 @@
 use std::fs;
 use std::path::Path;
 
-use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{LocalExtensions, PullFile, PullResult, pull_files};
+use crate::core::files::{LocalExtensions, PullResult, pull_files};
+use crate::core::project::RemoteFile;
 use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
 
 pub async fn pull<A: PromptAdapter>(
-    _client: &ApiClient,
     config: &ProjectConfig,
-    remote: &[PullFile],
+    cwd: &Path,
+    remote: &[RemoteFile],
     delete_unused: bool,
     force: bool,
     ui: &Ui<A>,
@@ -23,8 +23,10 @@ pub async fn pull<A: PromptAdapter>(
         );
     }
     let extensions = LocalExtensions::from_config(config);
+    let pull_inputs: Vec<crate::core::files::PullFile> =
+        remote.iter().map(|entry| entry.file.clone()).collect();
     let mut result = pull_files(
-        remote,
+        &pull_inputs,
         &config.content_dir,
         config.allow_symlinks,
         32,
@@ -38,7 +40,7 @@ pub async fn pull<A: PromptAdapter>(
                 default: false,
             })?;
         if confirmed {
-            let remote_names: std::collections::HashSet<_> = remote
+            let remote_names: std::collections::HashSet<_> = pull_inputs
                 .iter()
                 .map(|file| extensions.local_name(file))
                 .collect();
@@ -53,6 +55,18 @@ pub async fn pull<A: PromptAdapter>(
             }
         }
     }
+    // clasp pull.ts display: `files.map(f => f.localPath)` — the fetched
+    // remote files' cwd-relative paths (files.ts `fetchRemote`), not the
+    // write result's contentDir-relative paths.
+    let display_pulled: Vec<String> = remote
+        .iter()
+        .map(|entry| entry.local_path.clone())
+        .collect();
+    let display_deleted: Vec<String> = result
+        .deleted
+        .iter()
+        .map(|path| crate::commands::show_file_status::cwd_relative(cwd, &config.content_dir, path))
+        .collect();
     if output.is_json() {
         #[derive(serde::Serialize)]
         struct PullOutput<'a> {
@@ -62,9 +76,20 @@ pub async fn pull<A: PromptAdapter>(
             deleted_files: &'a [String],
         }
         output.print_json(&PullOutput {
-            pulled_files: &result.written,
-            deleted_files: &result.deleted,
+            pulled_files: &display_pulled,
+            deleted_files: &display_deleted,
         })?;
+    } else {
+        // clasp pull.ts order: the unused-file deletions are reported first
+        // (deleteLocalFiles runs before the pulled-file listing), then the
+        // `└─ {path}` lines, then the count.
+        for path in &display_deleted {
+            output.message(&format!("Deleted {path}"));
+        }
+        for path in &display_pulled {
+            output.message(&format!("└─ {path}"));
+        }
+        output.message(&crate::i18n::pulled_files(display_pulled.len()));
     }
     Ok(result)
 }

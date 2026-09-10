@@ -58,6 +58,19 @@ impl Default for AuthEndpoints {
     }
 }
 
+impl AuthEndpoints {
+    /// Environment-aware endpoints (T4 golden-subprocess contract): the
+    /// token/userinfo URLs follow the `CRSP_*_BASE_URL` overrides while the
+    /// production Google URLs remain the defaults. Paths stay unchanged.
+    pub fn from_base_urls(base: &crate::api::BaseUrls) -> Self {
+        Self {
+            auth_url: GOOGLE_AUTH_URL.to_string(),
+            token_url: crate::api::client::service_url(&base.oauth2, "/token"),
+            userinfo_url: crate::api::client::service_url(&base.userinfo, "/v2/userinfo"),
+        }
+    }
+}
+
 /// Client classification shown by show-authorized-user (clasp
 /// `oauth_client.ts:28-33`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

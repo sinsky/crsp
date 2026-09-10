@@ -614,6 +614,12 @@ fn update_deployment_accepts_json_flag_at_both_positions() {
 #[test]
 fn run_wires_every_canonical_command_without_placeholder_errors() {
     for (name, _) in CANONICAL_COMMANDS {
+        // `login` starts the real localhost auth listener (it blocks until a
+        // browser completes the flow) and `start-mcp-server` blocks on stdio;
+        // both are exercised in dedicated suites instead.
+        if *name == "login" || *name == "start-mcp-server" {
+            continue;
+        }
         let cli = parse_canonical(name);
         let result = run(&cli);
         assert!(

@@ -1,0 +1,5 @@
+[[request]]
+method = "DELETE"
+path = "/v1/projects/script/deployments/dep1"
+status = 200
+body_json = '''{}'''

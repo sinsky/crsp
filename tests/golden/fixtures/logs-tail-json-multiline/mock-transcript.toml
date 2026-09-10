@@ -1,0 +1,5 @@
+[[request]]
+method = "POST"
+path = "/v2/entries:list"
+status = 200
+body_json = '''{"entries":[{"insertId":"i2","severity":"DEBUG","timestamp":"2026-01-01T01:00:00Z","jsonPayload":{"message":"hi from json"},"resource":{"labels":{"function_name":"doStuff","project_id":"p"}}}]}'''

@@ -243,7 +243,9 @@ pub fn sort_for_test(files: &mut [LocalFile], order: &[String]) {
     sort_push_order(files, order);
 }
 
-fn locale_key(value: &str) -> (String, String, String) {
+/// JS `localeCompare` approximation used for display sorts (clasp sorts
+/// untracked files with `a.localeCompare(b)`).
+pub fn locale_key(value: &str) -> (String, String, String) {
     let folded = value.to_lowercase();
     let case_tie = value
         .chars()

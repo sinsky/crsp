@@ -1,0 +1,11 @@
+[[request]]
+method = "POST"
+path = "/v1/projects"
+status = 200
+body = '{"title":"My Script"}'
+body_json = '{"scriptId":"new-script-id"}'
+[[request]]
+method = "GET"
+path = "/v1/projects/new-script-id/content"
+status = 200
+body_json = '{"scriptId":"new-script-id","files":[{"name":"appsscript","type":"JSON","source":"{\"timeZone\":\"America/New_York\"}"},{"name":"HelloWorld","type":"SERVER_JS","source":"function hello(){}\n"}]}'

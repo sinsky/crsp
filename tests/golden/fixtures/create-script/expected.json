@@ -1,0 +1,28 @@
+{
+  "command": [
+    "create-script",
+    "--title",
+    "My Script"
+  ],
+  "env": {},
+  "stdout": "Created new script: https://script.google.com/d/new-script-id/edit\n\u2514\u2500 appsscript.json\n\u2514\u2500 HelloWorld.js\nCloned 2 files.\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"new-script-id\",\n  \"rootDir\": \"\",\n  \"scriptExtensions\": [\n    \".js\",\n    \".gs\"\n  ],\n  \"htmlExtensions\": [\n    \".html\"\n  ],\n  \"jsonExtensions\": [\n    \".json\"\n  ],\n  \"filePushOrder\": [],\n  \"skipSubdirectories\": false\n}",
+    "project/HelloWorld.js": "function hello(){}\n",
+    "project/appsscript.json": "{\"timeZone\":\"America/New_York\"}",
+    "project/empty/.keep": ""
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/v1/projects"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/new-script-id/content"
+    }
+  ]
+}

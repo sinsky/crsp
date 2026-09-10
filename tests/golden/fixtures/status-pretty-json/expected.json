@@ -1,0 +1,17 @@
+{
+  "command": [
+    "show-file-status",
+    "--json"
+  ],
+  "env": {},
+  "stdout": "{\n  \"filesToPush\": [\n    \"src/appsscript.json\",\n    \"src/Code.js\"\n  ],\n  \"untrackedFiles\": [\n    \"src/untracked.txt\"\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/appsscript.json": "{\n  \"timeZone\": \"America/New_York\"\n}\n",
+    "project/src/Code.js": "// hello\n",
+    "project/src/untracked.txt": "untracked content\n"
+  },
+  "requests": []
+}

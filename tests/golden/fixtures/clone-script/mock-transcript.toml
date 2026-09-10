@@ -1,0 +1,5 @@
+[[request]]
+method = "GET"
+path = "/v1/projects/other-script/content"
+status = 200
+body_json = '''{"scriptId":"other-script","files":[{"name":"appsscript","type":"JSON","source":"{\"timeZone\":\"America/Los_Angeles\"}"},{"name":"Main","type":"SERVER_JS","source":"// main\n"}]}'''

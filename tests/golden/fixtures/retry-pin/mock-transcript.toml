@@ -1,0 +1,6 @@
+[[request]]
+method = "GET"
+path = "/v1/projects/script/deployments"
+status = 500
+times = 4
+body_json = '{"error":{"code":500,"message":"transient server error","status":"INTERNAL"}}'

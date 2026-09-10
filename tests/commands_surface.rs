@@ -3,6 +3,8 @@ use predicates::str::contains;
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 use tempfile::tempdir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ALIAS_PAIRS: &[(&str, &str, &[&str])] = &[
     ("clone", "clone-script", &[]),
@@ -209,4 +211,54 @@ fn carried_validation_and_noninteractive_contracts_are_observable() {
         .failure()
         .code(1)
         .stderr(contains("Project settings not found."));
+}
+
+#[tokio::test]
+async fn show_authorized_user_human_output_matches_clasp_and_honors_base_url_overrides() {
+    use serde_json::json;
+    use tempfile::tempdir;
+    let directory = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".clasprc.json"),
+        json!({"tokens": {"default": {
+            "client_id": "1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com",
+            "client_secret": "v6V3fKV_zWU7iw1DrpO1rknX",
+            "type": "authorized_user",
+            "access_token": "ACCESS-PLACEHOLDER",
+            "refresh_token": "REFRESH-PLACEHOLDER",
+            "expiry_date": 99999999999999i64
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/userinfo"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": "u1", "email": "user@example.com"})),
+        )
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("crsp")
+        .unwrap()
+        .arg("show-authorized-user")
+        .current_dir(directory.path())
+        .env("HOME", home.path())
+        .env("CRSP_USERINFO_BASE_URL", server.uri())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "You are logged in as user@example.com.\nOAuth client ID: 1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com (google-provided).\n"
+    );
+    // The userinfo request was actually routed through the override.
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        1
+    );
 }

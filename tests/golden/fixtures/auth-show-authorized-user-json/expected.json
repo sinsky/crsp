@@ -1,0 +1,20 @@
+{
+  "command": [
+    "show-authorized-user",
+    "--json"
+  ],
+  "env": {},
+  "stdout": "{\n  \"loggedIn\": true,\n  \"email\": \"user@example.com\",\n  \"clientId\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n  \"clientType\": \"google-provided\"\n}\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v2/userinfo"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "command": [
+    "pull",
+    "-d"
+  ],
+  "env": {},
+  "stdout": "\u2514\u2500 src/appsscript.json\n\u2514\u2500 src/Code.js\nPulled 2 files.\n",
+  "stderr": "You are not in an interactive terminal and --force not used. Skipping file deletion.\n",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/appsscript.json": "{\"timeZone\":\"America/New_York\",\"exceptionLogging\":\"STACKDRIVER\"}",
+    "project/src/Code.js": "// hello\n"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v1/projects/script/content"
+    }
+  ]
+}

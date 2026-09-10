@@ -1,0 +1,14 @@
+{
+  "command": [
+    "logout"
+  ],
+  "env": {},
+  "stdout": "Deleted credentials.\n",
+  "stderr": "",
+  "exit": 0,
+  "files": {
+    "home/.clasprc.json": "{\n  \"tokens\": {}\n}",
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n"
+  },
+  "requests": []
+}
