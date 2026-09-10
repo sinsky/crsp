@@ -6,7 +6,6 @@
 //! noninteractive fallbacks so prompt logic never leaks into commands.
 
 use std::io::{self, IsTerminal};
-use std::ops::{Deref, DerefMut};
 
 use crate::error::CrspError;
 
@@ -277,46 +276,56 @@ fn map_prompt_error(error: io::Error) -> CrspError {
     }
 }
 
+/// A process-wide Tokio runtime for `drive_isolated`'s fallback path: the
+/// first isolated call in a process pays a one-time warm-up (including async
+/// DNS/resolver initialization that otherwise stalls the first HTTP request
+/// issued on this runtime for tens of seconds), so it is built eagerly at
+/// process start instead of lazily on first use. Production always has an
+/// ambient multi-thread runtime (`lib::run`), so this path only serves
+/// current-thread contexts (notably `#[tokio::test]`).
+static ISOLATED_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+    std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("isolated spinner runtime")
+    });
+
+/// A `Handle` to the fallback isolated runtime.
+fn isolated_handle() -> tokio::runtime::Handle {
+    ISOLATED_RUNTIME.handle().clone()
+}
+
 /// Drives the async `body` to completion on a dedicated scoped worker thread
-/// backed by the shared isolated runtime, blocking the calling thread and
-/// returning the body's output.
+/// that has entered the ambient runtime context, blocking the calling thread
+/// and returning the body's output.
 ///
 /// Used only by [`Ui::with_async_spinner`]'s interactive branch: the demand
 /// spinner runs its closure on a raw scoped thread where the ambient runtime
-/// context is unavailable, so the body is driven on the isolated runtime
-/// instead. The non-TTY path never reaches this function — it awaits the body
+/// context is unavailable, so the body is driven on the ambient runtime via
+/// `Handle::block_on` on a worker thread that re-enters the ambient context.
+/// The non-TTY path never reaches this function — it awaits the body
 /// directly on the calling runtime (see [`Ui::with_async_spinner`]).
-///
-/// A process-wide Tokio runtime provides the isolated driver
-/// (`ISOLATED_RUNTIME`): one runtime instead of one per call, because
-/// per-call runtimes are measurable (each builds a thread pool) and their
-/// churn starves busy test environments.
-static ISOLATED_RUNTIME: std::sync::Mutex<Option<tokio::runtime::Runtime>> =
-    std::sync::Mutex::new(None);
-
-/// A `Handle` to the shared isolated runtime, building it on first use.
-/// The ambient runtime cannot be reused from the spinner thread (the thread
-/// local context is not shared across threads), so service calls are driven
-/// on this runtime instead.
-fn isolated_handle() -> tokio::runtime::Handle {
-    let mut guard = ISOLATED_RUNTIME.lock().unwrap();
-    if guard.is_none() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("isolated spinner runtime");
-        *guard.deref_mut() = Some(runtime);
-    }
-    guard.deref().as_ref().unwrap().handle().clone()
-}
-
+/// Because the same ambient runtime drives the work, its `reqwest` connection
+/// pool is reused safely (no cross-runtime pool sharing).
 pub fn drive_isolated<'a, F: std::future::Future + Send + 'a>(body: F) -> F::Output
 where
     F::Output: Send + 'a,
 {
-    let handle = isolated_handle();
+    // On a current-thread runtime (e.g. `#[tokio::test]`), blocking the only
+    // runtime thread and then `block_on`-ing the same runtime deadlocks, so
+    // choose the shared isolated multi-thread runtime instead.
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            handle
+        }
+        _ => isolated_handle(),
+    };
     std::thread::scope(|scope| {
-        let join = scope.spawn(move || handle.block_on(body));
+        let join = scope.spawn(move || {
+            let _guard = handle.enter();
+            handle.block_on(body)
+        });
         match join.join() {
             // The scoped thread's failure to return means it panicked; the
             // scope re-raises before returning, so reaching this fallback is a
