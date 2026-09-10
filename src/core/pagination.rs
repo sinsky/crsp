@@ -55,61 +55,17 @@ pub struct PagedResults<T> {
 /// Fetches pages until the token is exhausted or a limit is reached.
 /// Mid-page failures returned by `fetch` propagate immediately (never
 /// swallowed, and without partial results — spec §7.3).
-pub async fn fetch_pages_send<T, F, Fut>(
+///
+/// The `Send` bounds keep the whole call chain spawnable so async task
+/// contexts (MCP tool handlers, tokio tasks) can page through any typed
+/// API adapter — there is exactly one pagination loop (spec §7.3).
+pub async fn fetch_pages<T, F, Fut>(
     mut fetch: F,
     options: PageOptions,
 ) -> Result<PagedResults<T>, CrspError>
 where
     F: FnMut(usize, Option<String>) -> Fut + Send,
     Fut: std::future::Future<Output = Result<Page<T>, CrspError>> + Send,
-{
-    fetch_pages_send_impl(&mut fetch, options).await
-}
-
-async fn fetch_pages_send_impl<T, F, Fut>(
-    fetch: &mut F,
-    options: PageOptions,
-) -> Result<PagedResults<T>, CrspError>
-where
-    F: FnMut(usize, Option<String>) -> Fut + Send,
-    Fut: std::future::Future<Output = Result<Page<T>, CrspError>> + Send,
-{
-    let PageOptions {
-        page_size,
-        max_pages,
-        max_results,
-    } = options;
-    let mut results = Vec::new();
-    let mut page_token = None;
-    let mut page_count = 0;
-    loop {
-        let page = fetch(page_size, page_token.take()).await?;
-        results.extend(page.results);
-        page_count += 1;
-        page_token = page.page_token;
-        if page_token.is_none() || page_count >= max_pages || results.len() >= max_results {
-            break;
-        }
-    }
-    if results.len() > max_results {
-        results.truncate(max_results);
-        return Ok(PagedResults {
-            results,
-            partial_results: true,
-        });
-    }
-    Ok(PagedResults {
-        results,
-        partial_results: page_token.is_some(),
-    })
-}
-
-pub async fn fetch_pages<T, F>(
-    mut fetch: F,
-    options: PageOptions,
-) -> Result<PagedResults<T>, CrspError>
-where
-    F: AsyncFnMut(usize, Option<String>) -> Result<Page<T>, CrspError>,
 {
     let PageOptions {
         page_size,

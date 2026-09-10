@@ -24,9 +24,18 @@ const SCRIPT_ID_REQUIRED: &str = "Script ID is required.";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectArgs {
+pub struct PushProjectArgs {
     #[schemars(
         description = "The local directory of the Apps Script project to push. Must contain a .clasp.json file containing the project info."
+    )]
+    pub project_dir: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PullProjectArgs {
+    #[schemars(
+        description = "The local directory of the Apps Script project to update. Must contain a .clasp.json file containing the project info."
     )]
     pub project_dir: String,
 }
@@ -178,7 +187,7 @@ impl McpServer {
         annotations(title = "Push project files to Apps Script", open_world_hint = false, destructive_hint = true, idempotent_hint = false, read_only_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_type::<FilesOutput>()
     )]
-    async fn push_files(&self, Parameters(args): Parameters<ProjectArgs>) -> CallToolResult {
+    async fn push_files(&self, Parameters(args): Parameters<PushProjectArgs>) -> CallToolResult {
         let project_dir = match self.validate_project(&args.project_dir) {
             Ok(path) => path,
             Err(error) => return CallToolResult::error(vec![ContentBlock::text(error)]),
@@ -219,7 +228,7 @@ impl McpServer {
         annotations(title = "Pull project files from Apps Script", open_world_hint = false, destructive_hint = true, idempotent_hint = false, read_only_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_type::<FilesOutput>()
     )]
-    async fn pull_files(&self, Parameters(args): Parameters<ProjectArgs>) -> CallToolResult {
+    async fn pull_files(&self, Parameters(args): Parameters<PullProjectArgs>) -> CallToolResult {
         let project_dir = match self.validate_project(&args.project_dir) {
             Ok(path) => path,
             Err(error) => return CallToolResult::error(vec![ContentBlock::text(error)]),
@@ -396,7 +405,7 @@ impl McpServer {
 
     #[tool(
         name = "list_projects",
-        description = "Lists Apps Script projects accessible to the authenticated user.",
+        description = "List Apps Script projects",
         annotations(title = "List Apps Script projects", open_world_hint = false, destructive_hint = false, idempotent_hint = false, read_only_hint = true),
         output_schema = rmcp::handler::server::tool::schema_for_type::<ScriptsOutput>()
     )]
@@ -419,7 +428,7 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
         let mut content = vec![ContentBlock::text(format!(
-            "Found {} Apps Script projects.",
+            "Found {} Apps Script projects (script ID in parentheses):",
             entries.len()
         ))];
         content.extend(

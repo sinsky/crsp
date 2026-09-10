@@ -83,60 +83,82 @@ async fn advertises_exact_tools_schemas_annotations_and_metadata() {
     }
 
     for tool in &listed.tools {
-        let required = tool
-            .input_schema
-            .get("required")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let properties = tool
-            .input_schema
-            .get("properties")
-            .cloned()
-            .unwrap_or(json!({}));
-        match tool.name.as_ref() {
-            "push_files" | "pull_files" => {
-                assert_eq!(required, json!(["projectDir"]));
-                assert_eq!(properties["projectDir"]["type"], "string");
-            }
-            "create_project" => {
-                assert_eq!(required, json!(["projectDir"]));
-                assert_eq!(properties["projectDir"]["type"], "string");
-                assert!(
-                    properties["sourceDir"]["type"] == "string"
-                        || properties["sourceDir"]["type"] == json!(["string", "null"])
-                );
-                assert!(
-                    properties["projectName"]["type"] == "string"
-                        || properties["projectName"]["type"] == json!(["string", "null"])
-                );
-            }
-            "clone_project" => {
-                assert_eq!(required, json!(["projectDir"]));
-                assert_eq!(properties["projectDir"]["type"], "string");
-                assert!(
-                    properties["sourceDir"]["type"] == "string"
-                        || properties["sourceDir"]["type"] == json!(["string", "null"])
-                );
-                assert!(
-                    properties["scriptId"]["type"] == "string"
-                        || properties["scriptId"]["type"] == json!(["string", "null"])
-                );
-            }
-            "list_projects" => {
-                assert!(required.is_null());
-                assert!(
-                    properties
-                        .as_object()
-                        .is_none_or(|properties| properties.is_empty())
-                );
-            }
-            name => panic!("unexpected tool {name}"),
-        }
-        if tool.name != "list_projects" {
-            assert!(tool.output_schema.is_some());
-        }
+        let schema = Value::Object((*tool.input_schema).clone());
+        assert_eq!(schema, expected_input_schema(&tool.name));
+        assert!(tool.output_schema.is_some());
     }
     server.cancel().await.expect("close server");
+}
+
+/// Exact clasp input schemas (zod shapes from clasp `mcp/server.ts`): field
+/// sets, per-field types, descriptions, and required flags must be identical
+/// (spec §2.7; §5 changes annotations only, never schemas).
+fn expected_input_schema(name: &str) -> Value {
+    let base = json!({"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object"});
+    match name {
+        "push_files" => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "projectDir": {
+                    "description": "The local directory of the Apps Script project to push. Must contain a .clasp.json file containing the project info.",
+                    "type": "string"
+                }
+            },
+            "required": ["projectDir"]
+        }),
+        "pull_files" => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "projectDir": {
+                    "description": "The local directory of the Apps Script project to update. Must contain a .clasp.json file containing the project info.",
+                    "type": "string"
+                }
+            },
+            "required": ["projectDir"]
+        }),
+        "create_project" => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "projectDir": {
+                    "description": "The local directory where the Apps Script project will be created.",
+                    "type": "string"
+                },
+                "sourceDir": {
+                    "description": "Local directory relative to projectDir where the Apps Script source files are located. If not specified, files are placed in the project directory.",
+                    "type": ["string", "null"]
+                },
+                "projectName": {
+                    "description": "Name of the project. If not provided, the project name will be inferred from the directory.",
+                    "type": ["string", "null"]
+                }
+            },
+            "required": ["projectDir"]
+        }),
+        "clone_project" => json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "projectDir": {
+                    "description": "The local directory where the Apps Script project will be created.",
+                    "type": "string"
+                },
+                "sourceDir": {
+                    "description": "Local directory relative to projectDir where the Apps Script source files are located. If not specified, files are placed in the project directory.",
+                    "type": ["string", "null"]
+                },
+                "scriptId": {
+                    "description": "ID of the Apps Script project to clone.",
+                    "type": ["string", "null"]
+                }
+            },
+            "required": ["projectDir"]
+        }),
+        "list_projects" => base,
+        name => panic!("unexpected tool {name}"),
+    }
 }
 
 #[tokio::test]
@@ -214,7 +236,7 @@ async fn list_projects_returns_exact_text_and_structured_content() {
     };
     assert_eq!(
         result.content[0].as_text().unwrap().text,
-        "Found 2 Apps Script projects."
+        "Found 2 Apps Script projects (script ID in parentheses):"
     );
     assert_eq!(
         result.content[1].as_text().unwrap().text,
@@ -394,32 +416,32 @@ async fn create_project_runs_create_pull_and_update_settings_flow() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"files":[{"name":"appsscript","type":"JSON","source":"{}"},{"name":"Code","type":"SERVER_JS","source":"function main() {}"}]}))).mount(&api).await;
     let project = tempfile::Builder::new()
         .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap()
-        .keep();
+        .unwrap();
+    let project_path = project.path().to_path_buf();
     let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
     let result = call_complete(
         &client,
         "create_project",
-        json!({"projectDir":project,"projectName":"Demo"}),
+        json!({"projectDir":project_path,"projectName":"Demo"}),
     )
     .await;
     assert_eq!(
         text(&result, 0),
         format!(
             "Created project created-1 in {} successfully.",
-            project.display()
+            project_path.display()
         )
     );
     assert_eq!(
         result.structured_content.as_ref().unwrap()["scriptId"],
         "created-1"
     );
-    assert!(project.join(".clasp.json").exists());
-    assert!(project.join("appsscript.json").exists());
-    assert!(project.join("Code.js").exists());
+    assert!(project_path.join(".clasp.json").exists());
+    assert!(project_path.join("appsscript.json").exists());
+    assert!(project_path.join("Code.js").exists());
     assert_eq!(
         serde_json::from_str::<Value>(
-            &std::fs::read_to_string(project.join(".clasp.json")).unwrap()
+            &std::fs::read_to_string(project_path.join(".clasp.json")).unwrap()
         )
         .unwrap()["scriptId"],
         "created-1"
@@ -463,6 +485,52 @@ async fn clone_success_writes_settings_and_is_stateless_per_server() {
         );
         assert!(project.join(".clasp.json").exists());
     }
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn calls_are_stateless_and_recover_across_failures() {
+    // Each tool call builds its own API client (spec §2.7: stateless,
+    // per-call `Clasp` construction), so a failed call cannot poison the
+    // next one on the same server instance.
+    let api = WireMockServer::start().await;
+    // 404 is not a retryable status (spec §7.1), so the first call fails
+    // immediately instead of retrying into the fallback mock.
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error":{"message":"gone"}})))
+        .up_to_n_times(1)
+        .mount(&api)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "fresh"}]}),
+        ))
+        .mount(&api)
+        .await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    let (client, server) = connected_with_urls(all_test_urls(&api.uri())).await;
+    let failed = call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(failed.is_error, Some(true));
+    assert!(text(&failed, 0).starts_with("Error pulling project:"));
+    let recovered =
+        call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(recovered.is_error, Some(false));
+    assert_eq!(
+        text(&recovered, 0),
+        format!(
+            "Pulled project in {} to local filesystem successfully.",
+            project.path().display()
+        )
+    );
     server.cancel().await.unwrap();
 }
 

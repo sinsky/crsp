@@ -1,6 +1,7 @@
 //! Core config, manifest, ignore, and pagination tests (spec §2.3, §4, §7.3).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crsp::constants::{
     PROJECT_CONFIG_FILENAME, PROJECT_IGNORE_FILENAME, PROJECT_MANIFEST_FILENAME,
@@ -703,29 +704,31 @@ fn page(results: Vec<i32>, page_token: Option<&str>) -> Page<i32> {
 
 #[tokio::test]
 async fn pagination_single_page_has_no_partial_results() {
-    let calls = std::cell::RefCell::new(0);
-    let fetch = async |page_size: usize, token: Option<String>| {
-        *calls.borrow_mut() += 1;
+    let calls = AtomicUsize::new(0);
+    let fetch = |page_size: usize, token: Option<String>| {
+        calls.fetch_add(1, Ordering::Relaxed);
         assert_eq!(page_size, 100);
         assert_eq!(token, None);
-        Ok(page(vec![1, 2, 3], None))
+        async move { Ok(page(vec![1, 2, 3], None)) }
     };
     let result = fetch_pages(fetch, PageOptions::default()).await.unwrap();
     assert_eq!(result.results, vec![1, 2, 3]);
     assert!(!result.partial_results);
-    assert_eq!(*calls.borrow(), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
 async fn pagination_follows_tokens_until_exhausted() {
-    let calls = std::cell::RefCell::new(0);
-    let fetch = async |_page_size: usize, token: Option<String>| {
-        *calls.borrow_mut() += 1;
-        match (*calls.borrow(), token.as_deref()) {
-            (1, None) => Ok(page(vec![1], Some("t1"))),
-            (2, Some("t1")) => Ok(page(vec![2], Some("t2"))),
-            (3, Some("t2")) => Ok(page(vec![3], None)),
-            _ => panic!("unexpected call {token:?}"),
+    let calls = AtomicUsize::new(0);
+    let fetch = |_page_size: usize, token: Option<String>| {
+        let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
+        async move {
+            match (call, token.as_deref()) {
+                (1, None) => Ok(page(vec![1], Some("t1"))),
+                (2, Some("t1")) => Ok(page(vec![2], Some("t2"))),
+                (3, Some("t2")) => Ok(page(vec![3], None)),
+                _ => panic!("unexpected call {token:?}"),
+            }
         }
     };
     let result = fetch_pages(fetch, PageOptions::default()).await.unwrap();
@@ -735,10 +738,10 @@ async fn pagination_follows_tokens_until_exhausted() {
 
 #[tokio::test]
 async fn pagination_reports_partial_results_at_max_pages() {
-    let calls = std::cell::RefCell::new(0);
-    let fetch = async |_page_size: usize, _token: Option<String>| {
-        *calls.borrow_mut() += 1;
-        Ok(page(vec![*calls.borrow()], Some("next")))
+    let calls = AtomicUsize::new(0);
+    let fetch = |_page_size: usize, _token: Option<String>| {
+        let n = calls.fetch_add(1, Ordering::Relaxed) + 1;
+        async move { Ok(page(vec![n as i32], Some("next"))) }
     };
     let options = PageOptions {
         page_size: 100,
@@ -748,18 +751,17 @@ async fn pagination_reports_partial_results_at_max_pages() {
     let result = fetch_pages(fetch, options).await.unwrap();
     assert_eq!(result.results, vec![1, 2, 3]);
     assert!(result.partial_results);
-    assert_eq!(*calls.borrow(), 3);
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
 }
 
 #[tokio::test]
 async fn pagination_stops_at_max_results_and_trims_with_partial() {
     // Loop stops once results.len() >= maxResults; an overshooting final page
     // is trimmed and marked partial (clasp utils.ts:210-216).
-    let calls = std::cell::RefCell::new(0);
-    let fetch = async |_page_size: usize, _token: Option<String>| {
-        let n = *calls.borrow_mut() + 1;
-        *calls.borrow_mut() = n;
-        Ok(page(vec![n; 5], Some("next")))
+    let calls = AtomicUsize::new(0);
+    let fetch = |_page_size: usize, _token: Option<String>| {
+        let n = calls.fetch_add(1, Ordering::Relaxed) + 1;
+        async move { Ok(page(vec![n as i32; 5], Some("next"))) }
     };
     let options = PageOptions {
         page_size: 100,
@@ -776,15 +778,17 @@ async fn pagination_stops_at_max_results_and_trims_with_partial() {
 
 #[tokio::test]
 async fn pagination_mid_page_errors_propagate() {
-    let calls = std::cell::RefCell::new(0);
-    let fetch = async |_page_size: usize, token: Option<String>| {
-        *calls.borrow_mut() += 1;
-        match (*calls.borrow(), token.as_deref()) {
-            (1, None) => Ok(page(vec![1], Some("t1"))),
-            _ => Err(CrspError::Api {
-                kind: crsp::error::ApiErrorKind::UnexpectedApiError,
-                message: "boom".to_string(),
-            }),
+    let calls = AtomicUsize::new(0);
+    let fetch = |_page_size: usize, token: Option<String>| {
+        let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
+        async move {
+            match (call, token.as_deref()) {
+                (1, None) => Ok(page(vec![1], Some("t1"))),
+                _ => Err(CrspError::Api {
+                    kind: crsp::error::ApiErrorKind::UnexpectedApiError,
+                    message: "boom".to_string(),
+                }),
+            }
         }
     };
     let error = fetch_pages(fetch, PageOptions::default())
@@ -794,7 +798,7 @@ async fn pagination_mid_page_errors_propagate() {
         CrspError::Api { message, .. } => assert_eq!(message, "boom"),
         other => panic!("expected Api error, got {other:?}"),
     }
-    assert_eq!(*calls.borrow(), 2);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
