@@ -75,23 +75,33 @@ pub async fn pull<A: PromptAdapter>(
             ));
         }
     }
-    if delete_unused && (force || ui.is_interactive()) {
+    // clasp pull.ts:101-106 + deleteLocalFiles:129-132: deletion candidates
+    // are computed before any prompt; an empty set short-circuits with no
+    // prompt while still printing the normal pull output below.
+    let files_to_delete: Vec<_> = if delete_unused && (force || ui.is_interactive()) {
+        let remote_names: std::collections::HashSet<_> = pull_inputs
+            .iter()
+            .map(|file| extensions.local_name(file))
+            .collect();
+        collected
+            .files
+            .iter()
+            .filter(|file| !remote_names.contains(&file.local_path))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !files_to_delete.is_empty() {
         let confirmed = force
             || ui.confirm(PromptConfirm {
                 prompt: "Delete unused files?".to_string(),
                 default: false,
             })?;
         if confirmed {
-            let remote_names: std::collections::HashSet<_> = pull_inputs
-                .iter()
-                .map(|file| extensions.local_name(file))
-                .collect();
-            for file in &collected.files {
-                if !remote_names.contains(&file.local_path) {
-                    let target = config.content_dir.join(&file.local_path);
-                    if delete_bound(&config.content_dir, &target, config.allow_symlinks)? {
-                        result.deleted.push(file.local_path.clone());
-                    }
+            for file in files_to_delete {
+                let target = config.content_dir.join(&file.local_path);
+                if delete_bound(&config.content_dir, &target, config.allow_symlinks)? {
+                    result.deleted.push(file.local_path.clone());
                 }
             }
         }

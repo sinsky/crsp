@@ -7,7 +7,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{PushResult, prepare_push, put_push_files};
+use crate::core::files::{PushResult, SkipReason, prepare_push, put_push_files};
 use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
@@ -96,7 +96,20 @@ pub async fn push<A: PromptAdapter>(
     ui: &Ui<A>,
     output: &mut Output<impl std::io::Write, impl std::io::Write>,
 ) -> Result<PushResult, CrspError> {
+    // clasp push.ts:115-131: the pending-change check runs before any spinner;
+    // a zero-change run prints the up-to-date message (or `[]` in JSON mode)
+    // with no `Pushing files...` spinner and no symlink warnings.
     let result = prepare_push(client, config).await?;
+    if result.up_to_date {
+        // clasp push.ts:100-106: JSON mode prints an empty array for no
+        // pending changes; human mode prints the up-to-date line.
+        if output.is_json() {
+            output.print_json(&Vec::<String>::new())?;
+        } else {
+            output.message("Script is already up to date.");
+        }
+        return Ok(result);
+    }
     if !force
         && result
             .changed
@@ -118,6 +131,21 @@ pub async fn push<A: PromptAdapter>(
         put_push_files(client, config, result_ref).await
     })
     .await??;
+    // clasp push.ts:69-82: collect-time symlink skips warn after the push
+    // (human mode only); pull's write-skip warnings live in pull.rs.
+    if !output.is_json() {
+        for item in &result.skipped {
+            if item.reason == SkipReason::Symlink {
+                output.warn(&crate::i18n::security_warning_skipping_symbolic_link(
+                    &crate::commands::show_file_status::cwd_relative(
+                        cwd,
+                        &config.content_dir,
+                        &item.local_path,
+                    ),
+                ));
+            }
+        }
+    }
     print_result(cwd, config, &result, output)?;
     if !watch {
         return Ok(result);

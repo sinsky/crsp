@@ -12,7 +12,6 @@ pub mod text;
 pub mod ui;
 
 use crate::auth::flow::{AuthOptions, validate_scope_options};
-use crate::auth::oauth_client::AuthEndpoints;
 use crate::auth::{CredentialStore, login, logout, show_authorized_user};
 use crate::cli::*;
 use crate::commands::shared::{SystemOpener, include_user_hint_in_url};
@@ -95,6 +94,10 @@ async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
     };
     let ui = Ui::new(DemandAdapter);
     let mut output = Output::stdout(cli.globals.json);
+    // clasp parity: login shares the show-authorized-user userinfo path, whose
+    // endpoint follows the CRSP_*_BASE_URL overrides (run_show_user below).
+    let endpoints =
+        crate::auth::oauth_client::AuthEndpoints::from_base_urls(&crate::api::BaseUrls::from_env());
     let payload = login(
         &options,
         None,
@@ -103,12 +106,19 @@ async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
         &ui,
         &mut output,
         &reqwest::Client::new(),
-        &AuthEndpoints::default(),
+        &endpoints,
         true,
     )
     .await?;
     if output.is_json() {
         output.print_json(&payload)?;
+    } else {
+        // clasp login.ts:188-198: the human result message matches
+        // show-authorized-user (email branch + unknown-user branch).
+        match payload.email.as_deref() {
+            Some(email) => output.message(&crate::i18n::logged_in_as(email)),
+            None => output.message(crate::i18n::LOGGED_IN_UNKNOWN_USER),
+        }
     }
     Ok(())
 }

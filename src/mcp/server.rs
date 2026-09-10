@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::api::{ApiClient, ApiClientConfig, BaseUrls};
 use crate::commands::shared::pull_initial_files;
 use crate::core::config::ProjectConfig;
-use crate::core::files::{LocalExtensions, pull_files, push_files};
+use crate::core::files::{LocalExtensions, pull_files};
 use crate::core::path::PathJail;
 use crate::core::project::{create_script, fetch_remote_files, list_scripts};
 use crate::error::CrspError;
@@ -238,7 +238,7 @@ impl McpServer {
             None => return error_result("Error pushing project", "Project settings not found."),
         };
         let client = self.client();
-        match push_files(&client, &config).await {
+        match crate::core::files::push_files(&client, &config).await {
             Ok(result) => success_with_files(
                 format!(
                     "Pushed project in {} to remote server successfully.",
@@ -341,13 +341,13 @@ impl McpServer {
             config.content_dir = source_dir;
         }
         let client = self.client();
-        let name = args.project_name.unwrap_or_else(|| {
-            project_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Untitled")
-                .to_string()
-        });
+        // clasp create_project (mcp/server.ts:335 + create-script.ts:70,201):
+        // an omitted projectName humanizes the project directory basename
+        // (inflection.humanize), exactly like `create-script`'s default title.
+        let name = args
+            .project_name
+            .clone()
+            .unwrap_or_else(|| crate::commands::create_script::default_project_name(&project_dir));
         match create_script(&client, &name, config.parent_id.as_deref()).await {
             Ok(script_id) => {
                 match pull_initial_files(&client, &script_id, &config, &project_dir, None).await {

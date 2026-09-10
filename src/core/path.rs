@@ -162,6 +162,19 @@ pub(crate) fn normalize_lexical(path: &Path) -> PathBuf {
     out
 }
 
+/// Lexical Windows drive-letter detection (`C:` / `C:/…`): Rust only parses
+/// this as `Component::Prefix` on Windows, but Node's `path.relative` treats
+/// cross-drive inputs as different roots on every platform (spec §8).
+fn drive_letter(path: &str) -> Option<char> {
+    let mut chars = path.chars();
+    let drive = chars.next()?.to_ascii_uppercase();
+    if drive.is_ascii_alphabetic() && chars.next() == Some(':') {
+        Some(drive)
+    } else {
+        None
+    }
+}
+
 /// Node `path.relative(from, to)` equivalent on lexically normalized paths.
 /// Returns an OS-native relative path string; equal paths yield `""`, and
 /// candidates on a different root (Windows drives) yield the absolute target.
@@ -174,17 +187,55 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
 
     let mut from_components = from.components();
     let mut to_components = to.components();
-    if from_components.next() != to_components.next() {
-        // Different roots (e.g. Windows drives): Node returns the absolute
-        // target in this case.
+    // Rust parses `C:/…` as a drive prefix only on Windows; on POSIX it is
+    // just two normal segments. Detect the drive letter lexically so the
+    // cross-drive rule holds on every platform (spec §8).
+    if drive_letter(&from.to_string_lossy()) != drive_letter(&to.to_string_lossy())
+        && (drive_letter(&from.to_string_lossy()).is_some()
+            || drive_letter(&to.to_string_lossy()).is_some())
+    {
         return to.to_string_lossy().into_owned();
     }
-    let from_rest: Vec<OsString> = from_components
+    let (from_first, to_first) = (from_components.next(), to_components.next());
+    // Node only treats a Windows drive/prefix (or a POSIX root) as the "root"
+    // for mismatch purposes; two relative paths with different first normal
+    // segments (e.g. `dirA/f1` vs `dirB/f2`) still share an empty common
+    // prefix and resolve to `../dirB/f2`, they do not return the target.
+    if from_first != to_first {
+        let roots_differ = match (from_first, to_first) {
+            (
+                Some(Component::Prefix(_) | Component::RootDir),
+                Some(Component::Prefix(_) | Component::RootDir),
+            )
+            | (None, Some(Component::Prefix(_) | Component::RootDir))
+            | (Some(Component::Prefix(_) | Component::RootDir), None) => true,
+            // One side exhausted (a strict prefix of the other), or both
+            // sides start with a normal/curdir component: not a root
+            // mismatch, just a differing tail.
+            _ => false,
+        };
+        if roots_differ {
+            return to.to_string_lossy().into_owned();
+        }
+    }
+    let mut from_rest: Vec<OsString> = from_first
+        .into_iter()
+        .chain(from_components)
         .map(|component| component.as_os_str().to_os_string())
         .collect();
-    let to_rest: Vec<OsString> = to_components
+    let mut to_rest: Vec<OsString> = to_first
+        .into_iter()
+        .chain(to_components)
         .map(|component| component.as_os_str().to_os_string())
         .collect();
+    // The common root/prefix component consumed above is not part of the
+    // relative tail; drop it. When the heads differed (relative paths with
+    // different first segments), both heads stay so they count as divergent
+    // segments.
+    if from_first == to_first && !from_rest.is_empty() {
+        from_rest.remove(0);
+        to_rest.remove(0);
+    }
 
     let common = from_rest
         .iter()
@@ -231,5 +282,22 @@ mod tests {
     fn relative_path_across_drives_returns_absolute_target() {
         // Windows drive change: Node returns the absolute target.
         assert_eq!(relative_path(Path::new("C:/a"), Path::new("D:/b")), "D:/b");
+    }
+
+    #[test]
+    fn relative_paths_with_different_heads_resolve_like_node() {
+        // Node treats both sides as directory paths (`path.relative` has no
+        // file/dir distinction): `relative('dirA/f1', 'dirB/f2')` climbs out
+        // of `f1` as well. The key parity point is that the differing first
+        // segments are NOT consumed as a drive/root name (which would yield
+        // just `dirB/f2`); verified against `node -e` above.
+        assert_eq!(
+            relative_path(Path::new("dirA/f1"), Path::new("dirB/f2")),
+            "../../dirB/f2"
+        );
+        assert_eq!(
+            relative_path(Path::new("a/b/c"), Path::new("a/d")),
+            "../../d"
+        );
     }
 }
