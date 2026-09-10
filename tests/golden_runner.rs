@@ -21,18 +21,36 @@ mod golden;
 const FIXTURES_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/fixtures");
 const HOME_DIR: &str = "_home";
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn all_golden_cases_pass() {
     let cases = discover(Path::new(FIXTURES_ROOT));
     assert!(!cases.is_empty(), "no golden cases discovered");
-    let mut failures = Vec::new();
-    for case in &cases {
-        // Run each case on its own spawned task so a wiremock drop-verification
-        // panic (e.g. a mocked endpoint never hit) surfaces as a per-case
-        // failure instead of aborting the whole run.
+    // Each case owns an isolated temp dir and wiremock server, so they are
+    // independent. Run them with bounded concurrency (a semaphore of
+    // CONCURRENCY permits) while spawning each on its own task: the spawn keeps
+    // a wiremock drop-verification panic (e.g. a mocked endpoint never hit)
+    // contained to that case instead of aborting the whole run. `run_binary`
+    // uses the async `tokio::process` so blocked subprocess waits never starve
+    // the worker threads that drive the wiremock servers.
+    const CONCURRENCY: usize = 4;
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
+    let mut handles = Vec::with_capacity(cases.len());
+    for case in cases {
         let name = case.name.clone();
-        let task_case = case.clone();
-        let result = tokio::spawn(async move { run_case(&task_case).await })
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("golden concurrency permit");
+        let handle = tokio::spawn(async move {
+            let _permit = permit;
+            run_case(&case).await
+        });
+        handles.push((name, handle));
+    }
+    let mut failures = Vec::new();
+    for (name, handle) in handles {
+        let result = handle
             .await
             .map_err(|error| format!("case crashed: {error}"))
             .and_then(|result| result);
@@ -158,7 +176,7 @@ async fn run_case(case: &Case) -> Result<(), String> {
     let mut failures = Vec::new();
     let mut last: Option<RunResult> = None;
     for (label, variant) in &variants {
-        let output = run_binary(case, &server, project.path(), home.path(), &variant.command);
+        let output = run_binary(case, &server, project.path(), home.path(), &variant.command).await;
         let stdout = normalize(
             String::from_utf8_lossy(&output.stdout).as_ref(),
             &case.secrets,
@@ -237,14 +255,14 @@ fn home_files(home: &Path) -> BTreeMap<String, String> {
     snapshot_tree(home, "home/", None)
 }
 
-fn run_binary(
+async fn run_binary(
     case: &Case,
     server: &MockServer,
     project_dir: &Path,
     home: &Path,
     argv: &[String],
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_crsp"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_crsp"));
     let project_text = project_dir.to_string_lossy().to_string();
     let args: Vec<String> = argv
         .iter()
@@ -271,7 +289,7 @@ fn run_binary(
     for (key, value) in &case.expected.env {
         command.env(key, value);
     }
-    command.output().expect("golden child process")
+    command.output().await.expect("golden child process")
 }
 
 async fn observations(server: &MockServer) -> Vec<ExpectedRequest> {

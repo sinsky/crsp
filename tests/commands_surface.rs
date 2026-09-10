@@ -1,7 +1,10 @@
 use assert_cmd::Command;
 use predicates::str::contains;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -27,8 +30,23 @@ fn binary() -> Command {
     Command::cargo_bin("crsp").unwrap()
 }
 
-fn run_binary(name: &str, args: &[&str]) -> std::process::Output {
-    binary().arg(name).args(args).output().unwrap()
+/// Runs the binary with an isolated `HOME` so credential-touching commands
+/// (`logout`, `show-authorized-user`) cannot race on shared state and never
+/// mutate the developer's real credentials.
+fn run_binary(name: &str, args: &[&str], home: &Path) -> std::process::Output {
+    binary()
+        .arg(name)
+        .args(args)
+        .env("HOME", home)
+        .output()
+        .unwrap()
+}
+
+fn worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .min(8)
 }
 
 #[test]
@@ -93,19 +111,40 @@ fn canonical_commands_have_command_specific_binary_outcomes() {
         ),
         ("start-mcp-server", &[], 0, ""),
     ];
-    for (command, args, code, expected) in cases {
-        if *command == "start-mcp-server" {
-            continue;
+    let next = AtomicUsize::new(0);
+    let failures = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count() {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= cases.len() {
+                        break;
+                    }
+                    let (command, args, expected_code, expected_text) = cases[index];
+                    if command == "start-mcp-server" {
+                        continue;
+                    }
+                    let home = tempdir().unwrap();
+                    let output = run_binary(command, args, home.path());
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    if output.status.code() != Some(expected_code) || !text.contains(expected_text)
+                    {
+                        failures.lock().unwrap().push(format!(
+                            "{command}: exit={:?} expected={expected_code}\ntext: {text}",
+                            output.status.code()
+                        ));
+                    }
+                }
+            });
         }
-        let output = run_binary(command, args);
-        assert_eq!(output.status.code(), Some(*code), "{command}");
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(text.contains(expected), "{command}: {text}");
-    }
+    });
+    let failures = failures.into_inner().unwrap();
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
 #[test]
@@ -148,33 +187,54 @@ fn auth_surface_uses_command_specific_fixture_observables() {
         r#"{"tokens":{"default":{"access_token":"ACCESS-PLACEHOLDER"}}}"#,
     )
     .unwrap();
-    let output = run_binary("logout", &["--auth", auth.to_str().unwrap()]);
+    let output = run_binary(
+        "logout",
+        &["--auth", auth.to_str().unwrap()],
+        directory.path(),
+    );
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Deleted credentials."));
-    let output = run_binary("show-authorized-user", &["--auth", auth.to_str().unwrap()]);
+    let output = run_binary(
+        "show-authorized-user",
+        &["--auth", auth.to_str().unwrap()],
+        directory.path(),
+    );
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Not logged in."));
 }
 
 #[test]
 fn aliases_match_canonical_binary_streams_and_exit_codes() {
-    for (alias, canonical, args) in ALIAS_PAIRS {
-        let alias_output = run_binary(alias, args);
-        let canonical_output = run_binary(canonical, args);
-        assert_eq!(
-            alias_output.status.code(),
-            canonical_output.status.code(),
-            "{alias}"
-        );
-        assert_eq!(
-            alias_output.stdout, canonical_output.stdout,
-            "{alias} stdout"
-        );
-        assert_eq!(
-            alias_output.stderr, canonical_output.stderr,
-            "{alias} stderr"
-        );
-    }
+    let next = AtomicUsize::new(0);
+    let failures = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count() {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= ALIAS_PAIRS.len() {
+                        break;
+                    }
+                    let (alias, canonical, args) = ALIAS_PAIRS[index];
+                    let home = tempdir().unwrap();
+                    let alias_output = run_binary(alias, args, home.path());
+                    let canonical_output = run_binary(canonical, args, home.path());
+                    if alias_output.status.code() != canonical_output.status.code()
+                        || alias_output.stdout != canonical_output.stdout
+                        || alias_output.stderr != canonical_output.stderr
+                    {
+                        failures.lock().unwrap().push(format!(
+                            "{alias} diverged from {canonical}: alias exit={:?} canonical exit={:?}",
+                            alias_output.status.code(),
+                            canonical_output.status.code(),
+                        ));
+                    }
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().unwrap();
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
 #[test]
