@@ -7,6 +7,7 @@
 use assert_cmd::Command;
 use clap::Parser;
 use crsp::cli::Commands;
+use crsp::error::CrspError;
 use crsp::{Cli, run};
 use predicates::prelude::PredicateBooleanExt;
 
@@ -616,8 +617,8 @@ fn run_wires_every_canonical_command_without_placeholder_errors() {
         let cli = parse_canonical(name);
         let result = run(&cli);
         assert!(
-            result.is_err(),
-            "{name} unexpectedly succeeded without fixture context"
+            !format!("{result:?}").contains("NotImplemented"),
+            "{name} still uses placeholder dispatch"
         );
     }
 }

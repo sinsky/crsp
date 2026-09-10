@@ -17,13 +17,13 @@ use crate::auth::{CredentialStore, login, logout, show_authorized_user};
 use crate::cli::*;
 use crate::commands::shared::{SystemOpener, include_user_hint_in_url};
 use crate::core::clasp::Clasp;
-use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{DemandAdapter, Ui};
 use clap::CommandFactory;
 use std::path::Path;
 
 pub use crate::cli::{Cli, Commands};
+pub use crate::error::CrspError;
 
 pub fn run(cli: &Cli) -> Result<(), CrspError> {
     match &cli.command {
