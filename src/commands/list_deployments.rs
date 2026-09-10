@@ -28,10 +28,11 @@ pub async fn list_deployments<A: PromptAdapter>(
         Some(script_id) => script_id.to_string(),
         None => assert_script_configured(config).await?.to_string(),
     };
-    let outcome = ui.with_spinner(i18n::FETCHING_DEPLOYMENTS, move || {
-        crate::ui::drive_isolated(async move { client.script().list_deployments(&script_id).await })
-    })?;
-    let deployments = (outcome?).results;
+    let deployments = ui
+        .with_async_spinner(i18n::FETCHING_DEPLOYMENTS, async move {
+            Ok::<_, CrspError>(client.script().list_deployments(&script_id).await?.results)
+        })
+        .await??;
     if output.is_json() {
         let entries: Vec<_> = deployments.iter().map(DeploymentJson::of).collect();
         output.print_json(&entries)?;

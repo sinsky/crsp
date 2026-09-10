@@ -29,9 +29,11 @@ pub async fn enable_api<A: PromptAdapter, O: UrlOpener>(
     assert_gcp_project_configured(config)?;
 
     let config_ref: &crate::core::config::ProjectConfig = config;
-    let outcome = ui.with_spinner(i18n::ENABLING_SERVICE, move || {
-        crate::ui::drive_isolated(async move { enable_service(client, config_ref, api).await })
-    })?;
+    let outcome = ui
+        .with_async_spinner(i18n::ENABLING_SERVICE, async move {
+            enable_service(client, config_ref, api).await
+        })
+        .await?;
     if let Err(error) = outcome {
         if matches!(
             &error,

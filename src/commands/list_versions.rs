@@ -36,10 +36,11 @@ pub async fn list_versions<A: PromptAdapter>(
         Some(script_id) => script_id.to_string(),
         None => assert_script_configured(config).await?.to_string(),
     };
-    let outcome = ui.with_spinner(i18n::FETCHING_VERSIONS, move || {
-        crate::ui::drive_isolated(async move { client.script().list_versions(&script_id).await })
-    })?;
-    let versions = (outcome?).results;
+    let versions = ui
+        .with_async_spinner(i18n::FETCHING_VERSIONS, async move {
+            Ok::<_, CrspError>(client.script().list_versions(&script_id).await?.results)
+        })
+        .await??;
     if output.is_json() {
         let entries: Vec<_> = versions
             .iter()

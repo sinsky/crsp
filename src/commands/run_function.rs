@@ -89,11 +89,13 @@ pub async fn run_function<A: PromptAdapter>(
     }
 
     let script_id = assert_script_configured(config).await?.to_string();
-    let outcome = ui.with_spinner(
-        &i18n::running_function(function_name.as_deref().unwrap_or_default()),
-        move || {
-            crate::ui::drive_isolated(async move {
-                client
+    let result = ui
+        .with_async_spinner(
+            &i18n::running_function(function_name.as_deref().unwrap_or_default()),
+            async move {
+                // clasp run-function.ts:111-125: `error.cause?.code` special
+                // cases map onto the command's validation notices.
+                match client
                     .script()
                     .run(
                         &script_id,
@@ -102,29 +104,24 @@ pub async fn run_function<A: PromptAdapter>(
                         !args.nondev,
                     )
                     .await
-            })
-        },
-    )?;
-    let result = match outcome {
-        // clasp run-function.ts:111-125: `error.cause?.code` special cases.
-        Err(CrspError::Api {
-            kind: crate::api::error::ApiErrorKind::NotAuthorized,
-            ..
-        }) => {
-            return Err(CrspError::Validation(
-                i18n::RUN_FUNCTION_NOT_AUTHORIZED.to_string(),
-            ));
-        }
-        Err(CrspError::Api {
-            kind: crate::api::error::ApiErrorKind::NotFound,
-            ..
-        }) => {
-            return Err(CrspError::Validation(
-                i18n::RUN_FUNCTION_NOT_FOUND.to_string(),
-            ));
-        }
-        other => other?,
-    };
+                {
+                    Err(CrspError::Api {
+                        kind: crate::api::error::ApiErrorKind::NotAuthorized,
+                        ..
+                    }) => Err(CrspError::Validation(
+                        i18n::RUN_FUNCTION_NOT_AUTHORIZED.to_string(),
+                    )),
+                    Err(CrspError::Api {
+                        kind: crate::api::error::ApiErrorKind::NotFound,
+                        ..
+                    }) => Err(CrspError::Validation(
+                        i18n::RUN_FUNCTION_NOT_FOUND.to_string(),
+                    )),
+                    other => other,
+                }
+            },
+        )
+        .await??;
     if result.is_null() {
         // clasp `if (!res.data) throw new Error('Function returned undefined')`.
         return Err(CrspError::Validation(

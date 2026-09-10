@@ -231,6 +231,42 @@ impl<A: PromptAdapter> Ui<A> {
         }
         Ok(f())
     }
+
+    /// Runs the async `body` under a spinner when interactive, and as a plain
+    /// await on the calling (ambient) runtime when not interactive.
+    ///
+    /// Interactive runs hand the body to the spinner's worker thread, where
+    /// the ambient runtime context is unavailable, so the body is driven on
+    /// the dedicated isolated runtime ([`drive_isolated`]). The non-TTY path
+    /// must not switch runtimes or block a thread: it awaits `body` directly,
+    /// keeping the pre-spinner async call graph and thread behavior intact.
+    ///
+    /// `body` resolves to the operation's own value (a `Vec`, a tuple, or a
+    /// `Result` the caller still unwraps); `.await?` this method's future to
+    /// obtain that value (a spinner-transport error surfaces as
+    /// [`CrspError`] on the outer result).
+    pub async fn with_async_spinner<Fut>(
+        &self,
+        message: &str,
+        body: Fut,
+    ) -> Result<Fut::Output, CrspError>
+    where
+        Fut: std::future::Future + Send,
+        Fut::Output: Send,
+    {
+        if self.adapter.is_interactive() {
+            let spec = PromptSpinner {
+                message: message.to_string(),
+            };
+            let outcome = self
+                .adapter
+                .spinner(spec, move || drive_isolated(body))
+                .map_err(map_prompt_error)?;
+            Ok::<Fut::Output, CrspError>(outcome)
+        } else {
+            Ok::<Fut::Output, CrspError>(body.await)
+        }
+    }
 }
 
 fn map_prompt_error(error: io::Error) -> CrspError {
@@ -242,19 +278,17 @@ fn map_prompt_error(error: io::Error) -> CrspError {
 }
 
 /// Drives the async `body` to completion on a dedicated scoped worker thread
-/// backed by a private Tokio runtime, blocking the calling thread and
+/// backed by the shared isolated runtime, blocking the calling thread and
 /// returning the body's output.
 ///
-/// [`Ui::with_spinner`] closes over a synchronous `FnOnce` body, and that body
-/// may run either inline inside a command task (noninteractive runs) or on the
-/// spinner's raw scoped thread when the TTY is interactive. From an inline
-/// command task the ambient runtime's threads are all busy driving the CLI, so
-/// a future could not be synchronously driven there even with
-/// [`Handle::block_on`](tokio::runtime::Handle::block_on); a private runtime on
-/// its own thread works from either place without touching (or deadlocking)
-/// the ambient one.
-/// A process-wide Tokio runtime dedicated to driving spinner-wrapped service
-/// calls ([`drive_isolated`]): one runtime instead of one per call, because
+/// Used only by [`Ui::with_async_spinner`]'s interactive branch: the demand
+/// spinner runs its closure on a raw scoped thread where the ambient runtime
+/// context is unavailable, so the body is driven on the isolated runtime
+/// instead. The non-TTY path never reaches this function — it awaits the body
+/// directly on the calling runtime (see [`Ui::with_async_spinner`]).
+///
+/// A process-wide Tokio runtime provides the isolated driver
+/// (`ISOLATED_RUNTIME`): one runtime instead of one per call, because
 /// per-call runtimes are measurable (each builds a thread pool) and their
 /// churn starves busy test environments.
 static ISOLATED_RUNTIME: std::sync::Mutex<Option<tokio::runtime::Runtime>> =

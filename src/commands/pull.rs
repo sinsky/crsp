@@ -28,12 +28,11 @@ pub async fn pull<A: PromptAdapter>(
     let pull_inputs: Vec<crate::core::files::PullFile> =
         remote.iter().map(|entry| entry.file.clone()).collect();
     // clasp pull.ts:45-66: locals are collected before the pull (the list
-    // also feeds the --deleteUnusedFiles comparison); collect-time symlink
-    // skips warn on stderr in human mode only.
-    let outcome = ui.with_spinner(crate::i18n::CHECKING_LOCAL_FILES, move || {
-        crate::ui::drive_isolated(async move { collect_local_files(config).await })
-    })?;
-    let collected = outcome?;
+    // also feeds the --deleteUnusedFiles comparison). clasp assigns a
+    // `Checking local files...` message here but never passes it to
+    // `withSpinner` — the local collect is a plain await; only the remote
+    // pull carries the spinner.
+    let collected = collect_local_files(config).await?;
     if !output.is_json() {
         for item in &collected.skipped {
             if item.reason == SkipReason::Symlink {
@@ -49,8 +48,8 @@ pub async fn pull<A: PromptAdapter>(
     }
     let pull_inputs_ref: &[crate::core::files::PullFile] = &pull_inputs;
     let extensions_ref: &crate::core::files::LocalExtensions = &extensions;
-    let outcome = ui.with_spinner(crate::i18n::PULLING_FILES, move || {
-        crate::ui::drive_isolated(async move {
+    let mut result = ui
+        .with_async_spinner(crate::i18n::PULLING_FILES, async move {
             pull_files(
                 pull_inputs_ref,
                 &config.content_dir,
@@ -60,8 +59,7 @@ pub async fn pull<A: PromptAdapter>(
             )
             .await
         })
-    })?;
-    let mut result = outcome?;
+        .await??;
     // clasp pull.ts:75-91: every write skip warns with the clasp reason text
     // (human mode only).
     if !output.is_json() {

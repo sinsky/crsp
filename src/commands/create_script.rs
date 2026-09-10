@@ -111,12 +111,11 @@ pub async fn create_script<A: PromptAdapter>(
 
     let (script_id, created_parent_id) = if STANDALONE_SCRIPT_TYPES.contains(&script_type.as_str())
     {
-        let outcome = ui.with_spinner(i18n::CREATING_SCRIPT, move || {
-            crate::ui::drive_isolated(async move {
+        let script_id = ui
+            .with_async_spinner(i18n::CREATING_SCRIPT, async move {
                 create_project_script(client, &name, args.parent_id).await
             })
-        })?;
-        let script_id = outcome?;
+            .await??;
         if !output.is_json() {
             output.message(&i18n::created_standalone_script(
                 &format!("https://script.google.com/d/{script_id}/edit"),
@@ -143,12 +142,11 @@ pub async fn create_script<A: PromptAdapter>(
                 VALID_TYPES,
             )));
         };
-        let outcome = ui.with_spinner(i18n::CREATING_SCRIPT, move || {
-            crate::ui::drive_isolated(async move {
+        let (script_id, parent_id) = ui
+            .with_async_spinner(i18n::CREATING_SCRIPT, async move {
                 create_with_container(client, &name, mime_type).await
             })
-        })?;
-        let (script_id, parent_id) = outcome?;
+            .await??;
         if !output.is_json() {
             output.message(&i18n::created_container_script(
                 &format!("https://drive.google.com/open?id={parent_id}"),
@@ -158,22 +156,26 @@ pub async fn create_script<A: PromptAdapter>(
         (script_id, Some(parent_id))
     };
 
-    // Initial pull + settings write (clasp create-script.ts:162-172). clasp
-    // createScript sets `options.project = {scriptId, parentId}`.
+    // Initial pull + settings write (clasp create-script.ts:162-170: both the
+    // pull and `updateSettings` run inside the single `Cloning script...`
+    // spinner). clasp createScript sets `options.project = {scriptId,
+    // parentId}`.
     let config_ref: &crate::core::config::ProjectConfig = &config;
     let script_id_ref: &str = &script_id;
-    let outcome = ui.with_spinner(i18n::CLONING_SCRIPT, move || {
-        crate::ui::drive_isolated(async move {
-            pull_initial_files(client, script_id_ref, config_ref, args.cwd, None).await
+    let created_parent_ref: &Option<String> = &created_parent_id;
+    let pulled = ui
+        .with_async_spinner(i18n::CLONING_SCRIPT, async move {
+            let pulled =
+                pull_initial_files(client, script_id_ref, config_ref, args.cwd, None).await?;
+            let parent_for_settings = created_parent_ref
+                .clone()
+                .or_else(|| args.parent_id.map(str::to_string));
+            with_created_project(config_ref, script_id_ref, parent_for_settings)
+                .update_settings()
+                .await?;
+            Ok::<_, CrspError>(pulled)
         })
-    })?;
-    let pulled = outcome?;
-    let parent_for_settings = created_parent_id
-        .clone()
-        .or_else(|| args.parent_id.map(str::to_string));
-    with_created_project(&config, &script_id, parent_for_settings)
-        .update_settings()
-        .await?;
+        .await??;
 
     if output.is_json() {
         output.print_json(&CreateJson {

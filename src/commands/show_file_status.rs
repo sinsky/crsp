@@ -22,10 +22,11 @@ pub async fn show_file_status<A: PromptAdapter, W: std::io::Write, E: std::io::W
     ui: &Ui<A>,
     output: &mut Output<W, E>,
 ) -> Result<StatusPayload, CrspError> {
-    let outcome = ui.with_spinner(i18n::ANALYZING_PROJECT_FILES, move || {
-        crate::ui::drive_isolated(async move { collect_local_files(config).await })
-    })?;
-    let collected = outcome?;
+    let collected = ui
+        .with_async_spinner(i18n::ANALYZING_PROJECT_FILES, async move {
+            collect_local_files(config).await
+        })
+        .await??;
     // clasp `localPath` values are `path.relative(cwd, …)`; the core
     // collection is contentDir-relative, so convert for every display path.
     let tracked = collected

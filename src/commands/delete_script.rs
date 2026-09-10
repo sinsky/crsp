@@ -61,10 +61,10 @@ pub async fn delete_script<A: PromptAdapter>(
     }
 
     let script_id_ref: &str = &script_id;
-    let outcome = ui.with_spinner(i18n::DELETING_YOUR_SCRIPTS, move || {
-        crate::ui::drive_isolated(async move { trash_script(client, script_id_ref).await })
-    })?;
-    outcome?;
+    ui.with_async_spinner(i18n::DELETING_YOUR_SCRIPTS, async move {
+        trash_script(client, script_id_ref).await
+    })
+    .await??;
     if output.is_json() {
         output.print_json(&DeletedJson { success: true })?;
     } else {

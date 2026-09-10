@@ -35,8 +35,8 @@ pub async fn create_deployment<A: PromptAdapter>(
     let script_id = assert_script_configured(config).await?.to_string();
     let version_number = parse_version(args.version_number)?;
     let description = args.description.unwrap_or_default();
-    let outcome = ui.with_spinner(i18n::DEPLOYING_PROJECT, move || {
-        crate::ui::drive_isolated(async move {
+    let deployment = ui
+        .with_async_spinner(i18n::DEPLOYING_PROJECT, async move {
             deploy(
                 client,
                 &script_id,
@@ -46,8 +46,7 @@ pub async fn create_deployment<A: PromptAdapter>(
             )
             .await
         })
-    })?;
-    let deployment = outcome?;
+        .await??;
     print_deployment_result(&deployment, false, output)?;
     Ok(deployment)
 }

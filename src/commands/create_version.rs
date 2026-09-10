@@ -42,8 +42,8 @@ pub async fn create_version<A: PromptAdapter>(
             default: Some(String::new()),
         })?);
     }
-    let outcome = ui.with_spinner(i18n::CREATING_A_NEW_VERSION, move || {
-        crate::ui::drive_isolated(async move {
+    let version_number = ui
+        .with_async_spinner(i18n::CREATING_A_NEW_VERSION, async move {
             version(
                 client,
                 &script_id,
@@ -51,8 +51,7 @@ pub async fn create_version<A: PromptAdapter>(
             )
             .await
         })
-    })?;
-    let version_number = outcome?;
+        .await??;
     if output.is_json() {
         output.print_json(&CreateVersionResult { version_number })?;
     } else {

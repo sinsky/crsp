@@ -495,7 +495,9 @@ pub const DISABLING_SERVICE: &str = "Disabling service...";
 /// `Pushing files...` (clasp push.ts:62 spinner message).
 pub const PUSHING_FILES: &str = "Pushing files...";
 
-/// `Checking local files...` (clasp pull.ts:47 spinner message).
+/// `Checking local files...` (clasp pull.ts:47 assigns this message but never
+/// passes it to `withSpinner`; the local collect is a plain await, so crsp
+/// does not show it either).
 pub const CHECKING_LOCAL_FILES: &str = "Checking local files...";
 
 /// `Pulling files...` (clasp pull.ts:69 spinner message).

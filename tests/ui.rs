@@ -323,6 +323,32 @@ fn demand_adapter_reports_non_interactive_in_captured_tests() {
     assert!(!DemandAdapter.is_interactive());
 }
 
+#[tokio::test]
+async fn non_interactive_async_spinner_runs_on_the_calling_runtime_only() {
+    // §round-1: the non-TTY path must NOT route through the isolated spinner
+    // runtime. Observable: the async body executes on the caller's runtime
+    // thread, exactly as a plain `.await` would.
+    let ui = Ui::new(FakeAdapter::non_interactive());
+    let caller_thread = std::thread::current().id();
+    let value: u32 = ui
+        .with_async_spinner("Pushing files...", async move {
+            assert_eq!(
+                std::thread::current().id(),
+                caller_thread,
+                "the async body must run on the calling thread, not the isolated runtime"
+            );
+            Ok::<u32, CrspError>(42)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(value, 42);
+    // No spinner events were produced noninteractively.
+    let adapter = ui.into_adapter();
+    assert!(adapter.spinner_starts.borrow().is_empty());
+    assert_eq!(adapter.spinner_stops.get(), 0);
+}
+
 // ---------------------------------------------------------------------------
 // §2.1 spinner message wiring: a TTY-interactive adapter must receive the
 // command's spinner message around each wrapped service call.
@@ -391,6 +417,40 @@ async fn list_versions_shows_the_spinner_message_on_an_interactive_adapter() {
     assert_eq!(
         adapter.spinner_starts.borrow().clone(),
         vec!["Fetching versions...".to_string()]
+    );
+    assert_eq!(adapter.spinner_stops.get(), 1);
+}
+
+#[tokio::test]
+async fn pull_wraps_only_the_remote_pull_not_the_local_collect() {
+    // §round-1 (finding 1a): clasp pull.ts wraps ONLY the remote pull API call
+    // in a `Pulling files...` spinner; the local collection is a plain await.
+    // The interactive adapter must therefore see exactly one spinner message.
+    let temp = TempDir::new().unwrap();
+    let config = configured_config(temp.path());
+    let remote = vec![crsp::core::project::RemoteFile {
+        file: crsp::core::files::PullFile::new("out.txt", "FILE", "hello"),
+        local_path: "out.txt".to_string(),
+    }];
+    let mut out = Vec::new();
+    let mut output = crsp::output::Output::new(false, &mut out, Vec::new());
+    let ui = Ui::new(FakeAdapter::interactive());
+    crsp::commands::pull::pull(
+        &config,
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &ui,
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let adapter = ui.into_adapter();
+    assert_eq!(
+        adapter.spinner_starts.borrow().clone(),
+        vec!["Pulling files...".to_string()],
+        "local collection must not carry a spinner (clasp pull.ts only wraps the remote pull)"
     );
     assert_eq!(adapter.spinner_stops.get(), 1);
 }

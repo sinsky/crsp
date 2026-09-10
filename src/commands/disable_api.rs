@@ -39,10 +39,10 @@ pub async fn disable_api<A: PromptAdapter, O: UrlOpener>(
     assert_gcp_project_configured(config)?;
 
     let config_ref: &crate::core::config::ProjectConfig = config;
-    let outcome = ui.with_spinner(i18n::DISABLING_SERVICE, move || {
-        crate::ui::drive_isolated(async move { disable_service(client, config_ref, api).await })
-    })?;
-    outcome?;
+    ui.with_async_spinner(i18n::DISABLING_SERVICE, async move {
+        disable_service(client, config_ref, api).await
+    })
+    .await??;
 
     if output.is_json() {
         output.print_json(&DisableJson {

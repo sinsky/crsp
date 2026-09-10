@@ -40,12 +40,17 @@ pub async fn delete_deployment<A: PromptAdapter>(
     let mut deleted: Vec<String> = Vec::new();
 
     if all {
-        let outcome = ui.with_spinner(i18n::FETCHING_DEPLOYMENTS, move || {
-            crate::ui::drive_isolated(async move {
-                client.script().list_deployments(script_id_ref).await
+        let deployments = ui
+            .with_async_spinner(i18n::FETCHING_DEPLOYMENTS, async move {
+                Ok::<_, CrspError>(
+                    client
+                        .script()
+                        .list_deployments(script_id_ref)
+                        .await?
+                        .results,
+                )
             })
-        })?;
-        let deployments = (outcome?).results;
+            .await??;
         for deployment in deployments
             .iter()
             .filter(|deployment| deployment.version_number().is_some())
@@ -53,10 +58,10 @@ pub async fn delete_deployment<A: PromptAdapter>(
             let Some(id) = deployment.deployment_id.as_deref() else {
                 continue;
             };
-            let outcome = ui.with_spinner(i18n::DELETING_DEPLOYMENT, move || {
-                crate::ui::drive_isolated(async move { undeploy(client, script_id_ref, id).await })
-            })?;
-            outcome?;
+            ui.with_async_spinner(i18n::DELETING_DEPLOYMENT, async move {
+                undeploy(client, script_id_ref, id).await
+            })
+            .await??;
             deleted.push(id.to_string());
             if !output.is_json() {
                 output.message(&i18n::deleted_deployment(id));
@@ -74,12 +79,17 @@ pub async fn delete_deployment<A: PromptAdapter>(
 
     let mut target = deployment_id.map(str::to_string);
     if target.is_none() {
-        let outcome = ui.with_spinner(i18n::FETCHING_DEPLOYMENTS, move || {
-            crate::ui::drive_isolated(async move {
-                client.script().list_deployments(script_id_ref).await
+        let deployments = ui
+            .with_async_spinner(i18n::FETCHING_DEPLOYMENTS, async move {
+                Ok::<_, CrspError>(
+                    client
+                        .script()
+                        .list_deployments(script_id_ref)
+                        .await?
+                        .results,
+                )
             })
-        })?;
-        let deployments = (outcome?).results;
+            .await??;
         let versioned: Vec<_> = deployments
             .iter()
             .filter(|deployment| deployment.version_number().is_some())
@@ -110,12 +120,10 @@ pub async fn delete_deployment<A: PromptAdapter>(
     match target {
         Some(id) => {
             let id_ref: &str = &id;
-            let outcome = ui.with_spinner(i18n::DELETING_DEPLOYMENT, move || {
-                crate::ui::drive_isolated(
-                    async move { undeploy(client, script_id_ref, id_ref).await },
-                )
-            })?;
-            outcome?;
+            ui.with_async_spinner(i18n::DELETING_DEPLOYMENT, async move {
+                undeploy(client, script_id_ref, id_ref).await
+            })
+            .await??;
             deleted.push(id.clone());
             if !output.is_json() {
                 output.message(&i18n::deleted_deployment(&id));

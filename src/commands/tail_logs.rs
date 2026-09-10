@@ -200,12 +200,17 @@ impl<'a, A: PromptAdapter, W: Write, E: Write> LogPoller<'a, A, W, E> {
             Some(ui) => {
                 let client = self.client;
                 let project_id = self.project_id;
-                let outcome = ui.with_spinner(i18n::FETCHING_LOGS, move || {
-                    crate::ui::drive_isolated(async move {
-                        client.logging().list_entries(project_id, &filter).await
-                    })
-                })?;
-                outcome?.results
+                let filter_ref = &filter;
+                ui.with_async_spinner(i18n::FETCHING_LOGS, async move {
+                    Ok::<_, CrspError>(
+                        client
+                            .logging()
+                            .list_entries(project_id, filter_ref)
+                            .await?
+                            .results,
+                    )
+                })
+                .await??
             }
             None => {
                 self.client

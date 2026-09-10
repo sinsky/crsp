@@ -138,16 +138,16 @@ pub async fn list_apis<A: PromptAdapter, O: crate::commands::shared::UrlOpener>(
     crate::commands::shared::assert_gcp_project_configured(config)?;
 
     let config_ref: &crate::core::config::ProjectConfig = config;
-    let outcome = ui.with_spinner(i18n::FETCHING_APIS, move || {
-        crate::ui::drive_isolated(async move {
+    let outcome = ui
+        .with_async_spinner(i18n::FETCHING_APIS, async move {
             // Sequentially so the request order is deterministic (the
             // enabled-services list precedes the discovery list).
-            (
+            Ok::<_, CrspError>((
                 get_enabled_services(client, config_ref).await,
                 get_available_services(client).await,
-            )
+            ))
         })
-    })?;
+        .await??;
     let (enabled_apis, available_apis) = outcome;
     let enabled_apis = enabled_apis?;
     let available_apis = available_apis?;

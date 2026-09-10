@@ -31,10 +31,11 @@ pub async fn list_scripts<A: PromptAdapter>(
     ui: &Ui<A>,
     output: &mut Output<impl Write, impl Write>,
 ) -> Result<Vec<DriveFile>, CrspError> {
-    let outcome = ui.with_spinner(i18n::FINDING_YOUR_SCRIPTS, move || {
-        crate::ui::drive_isolated(async move { fetch_scripts(client).await })
-    })?;
-    let files = (outcome?).results;
+    let files = ui
+        .with_async_spinner(i18n::FINDING_YOUR_SCRIPTS, async move {
+            Ok::<_, CrspError>(fetch_scripts(client).await?.results)
+        })
+        .await??;
     if output.is_json() {
         let entries: Vec<_> = files
             .iter()

@@ -114,10 +114,10 @@ pub async fn push<A: PromptAdapter>(
         force = true;
     }
     let result_ref: &PushResult = &result;
-    let outcome = ui.with_spinner(crate::i18n::PUSHING_FILES, move || {
-        crate::ui::drive_isolated(async move { put_push_files(client, config, result_ref).await })
-    })?;
-    outcome?;
+    ui.with_async_spinner(crate::i18n::PUSHING_FILES, async move {
+        put_push_files(client, config, result_ref).await
+    })
+    .await??;
     print_result(cwd, config, &result, output)?;
     if !watch {
         return Ok(result);
