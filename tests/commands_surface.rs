@@ -76,7 +76,7 @@ fn canonical_commands_have_command_specific_binary_outcomes() {
         ),
         ("tail-logs", &[], 1, "GCP project ID is not set"),
         ("setup-logs", &[], 1, "GCP project ID is not set"),
-        ("show-file-status", &[], 0, "Tracked files:"),
+        ("show-file-status", &[], 1, "Project settings not found."),
         ("list-apis", &[], 1, "GCP project ID is not set"),
         ("enable-api", &["drive"], 1, "GCP project ID is not set"),
         ("disable-api", &["drive"], 1, "GCP project ID is not set"),

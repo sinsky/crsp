@@ -22,6 +22,7 @@ pub async fn show_file_status<A: PromptAdapter, W: std::io::Write, E: std::io::W
     ui: &Ui<A>,
     output: &mut Output<W, E>,
 ) -> Result<StatusPayload, CrspError> {
+    crate::core::project::assert_script_configured(config).await?;
     let collected = ui
         .with_async_spinner(i18n::ANALYZING_PROJECT_FILES, async move {
             collect_local_files(config).await
@@ -129,15 +130,26 @@ fn collect_paths(
     current: &std::path::Path,
     result: &mut Vec<String>,
 ) -> Result<(), CrspError> {
-    for entry in std::fs::read_dir(current)? {
-        let entry = entry?;
+    let entries = match std::fs::read_dir(current) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
         let path = entry.path();
         let relative = path
             .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        if entry.file_type()?.is_dir() {
+        let is_dir = match entry.file_type() {
+            Ok(file_type) => file_type.is_dir(),
+            Err(_) => false,
+        };
+        if is_dir {
             collect_paths(root, &path, result)?;
         } else {
             result.push(relative);
