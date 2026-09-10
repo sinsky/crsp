@@ -1,5 +1,6 @@
 [[request]]
 method = "GET"
 path = "/v2/userinfo"
+headers = { authorization = "Bearer ACCESS-PLACEHOLDER" }
 status = 500
 body_json = '''{}'''

@@ -1,6 +1,7 @@
 [[request]]
 method = "GET"
 path = "/v1/projects/script/deployments"
+headers = { authorization = "Bearer ACCESS-PLACEHOLDER" }
 status = 500
 times = 4
 body_json = '{"error":{"code":500,"message":"transient server error","status":"INTERNAL"}}'

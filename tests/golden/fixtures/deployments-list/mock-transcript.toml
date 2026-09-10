@@ -1,6 +1,7 @@
 [[request]]
 method = "GET"
 path = "/v1/projects/script/deployments"
+headers = { authorization = "Bearer ACCESS-PLACEHOLDER" }
 status = 200
 times = 2
 body_json = '''{"deployments":[{"deploymentId":"dep1","deploymentConfig":{"versionNumber":1,"description":"first one"}},{"deploymentId":"dep2","deploymentConfig":{"versionNumber":3}},{"deploymentId":"RWA-HEAD"}]}'''
