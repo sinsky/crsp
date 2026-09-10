@@ -46,6 +46,17 @@ pub const MAX_STATUS_RETRIES: u32 = 3;
 /// Maximum transient retries for network/no-response failures (spec §7.1).
 pub const MAX_NETWORK_RETRIES: u32 = 2;
 
+/// google-auth-library `DEFAULT_EAGER_REFRESH_THRESHOLD_MILLIS` (authclient.js):
+/// a token whose `expiry_date` falls within this window is refreshed before
+/// the request (`isTokenExpiring`).
+pub const EAGER_REFRESH_THRESHOLD_MS: i64 = 5 * 60 * 1000;
+
+/// Shared token-expiry cell (milliseconds since the Unix epoch), wired by the
+/// production context so the client can lazy-refresh expiring tokens before
+/// sending. `None` = unknown expiry (library semantics: treated as never
+/// expiring).
+pub type ExpiryCell = Arc<StdMutex<Option<i64>>>;
+
 /// Callback producing a fresh access token (spec §7.4). Production wires this
 /// to [`crate::auth::flow::refresh_and_save`]; wiremock tests inject a
 /// counting stub.
@@ -65,6 +76,9 @@ pub struct ApiClientConfig {
     pub access_token: String,
     /// One-shot 401 refresh callback (spec §7.4).
     pub refresh: RefreshFn,
+    /// Shared expiry cell for the lazy first-use/expiry refresh (google-auth
+    /// library `isTokenExpiring`). `None` = unknown (never expiring).
+    pub token_expiry: Option<ExpiryCell>,
     /// Optional injectable sleeper; defaults to `tokio::time::sleep`.
     pub sleeper: Option<SleepFn>,
     /// `maxRetryDelay` clamp for the backoff `min()` (gaxios default:
@@ -83,6 +97,7 @@ impl ApiClientConfig {
         Self {
             access_token: access_token.into(),
             refresh,
+            token_expiry: None,
             sleeper: None,
             max_retry_delay: None,
             total_timeout: None,
@@ -161,6 +176,7 @@ pub struct ApiClient {
     pub(crate) http: reqwest::Client,
     base_urls: BaseUrls,
     access_token: StdMutex<String>,
+    token_expiry: Option<ExpiryCell>,
     refresh: RefreshFn,
     sleeper: SleepFn,
     max_retry_delay: Option<Duration>,
@@ -176,6 +192,7 @@ impl Clone for ApiClient {
             access_token: StdMutex::new(
                 self.access_token.lock().expect("access token lock").clone(),
             ),
+            token_expiry: self.token_expiry.clone(),
             refresh: Arc::clone(&self.refresh),
             sleeper: Arc::clone(&self.sleeper),
             max_retry_delay: self.max_retry_delay,
@@ -206,6 +223,7 @@ impl ApiClient {
             http,
             base_urls,
             access_token: StdMutex::new(config.access_token),
+            token_expiry: config.token_expiry,
             refresh: config.refresh,
             sleeper: config.sleeper.unwrap_or_else(default_sleeper),
             max_retry_delay: config.max_retry_delay,
@@ -258,19 +276,15 @@ impl ApiClient {
     /// 2xx response; every other final outcome is an error.
     pub async fn request(&self, request: ApiRequest) -> Result<ApiResponse, CrspError> {
         // clasp parity (google-auth-library 10.5.0 `getRequestMetadataAsync`):
-        // an empty access token with a refresh mechanism refreshes lazily at
-        // FIRST USE, before any API request. Without a refresh mechanism the
-        // closure fails locally — the `No access, refresh token, API key or
-        // refresh handler callback is set.` error — so an unauthenticated run
-        // fails fast instead of sending an empty bearer (spec §4.3 contract).
-        // A refresh that completes without a token is the library's
-        // `Could not refresh access token.` error.
-        if self
-            .access_token
-            .lock()
-            .expect("access token lock")
-            .is_empty()
-        {
+        // the token is refreshed lazily at FIRST USE — before any API request
+        // — when it is missing, or when its stored expiry falls within the
+        // eager-refresh threshold (`isTokenExpiring`). Without a refresh
+        // mechanism the closure fails locally — the `No access, refresh
+        // token, API key or refresh handler callback is set.` error — so an
+        // unauthenticated run fails fast instead of sending an empty bearer
+        // (spec §4.3 contract). A refresh that completes without a token is
+        // the library's `Could not refresh access token.` error.
+        if self.needs_pre_send_refresh() {
             let new_token = (self.refresh)().await?;
             if new_token.is_empty() {
                 return Err(CrspError::Auth(
@@ -285,6 +299,29 @@ impl ApiClient {
         } else {
             Err(api_error_from_response(response).await)
         }
+    }
+
+    /// google-auth-library `getAccessToken`/`isTokenExpiring` semantics: a
+    /// refresh is required before sending when the access token is missing,
+    /// or when the known expiry falls within the eager-refresh threshold.
+    /// Without expiry information the token is treated as never expiring.
+    fn needs_pre_send_refresh(&self) -> bool {
+        if self
+            .access_token
+            .lock()
+            .expect("access token lock")
+            .is_empty()
+        {
+            return true;
+        }
+        let Some(cell) = &self.token_expiry else {
+            return false;
+        };
+        let Some(expiry) = *cell.lock().expect("token expiry lock") else {
+            return false;
+        };
+        let now = (self.clock)().min(i64::MAX as u128) as i64;
+        expiry <= now + EAGER_REFRESH_THRESHOLD_MS
     }
 
     /// The retry/refresh state machine. Returns the final response for both

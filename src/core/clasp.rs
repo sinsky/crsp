@@ -49,26 +49,16 @@ impl Clasp {
         let mut credentials = load_credentials(&store, user, adc).await?;
         // google-auth-library parity (clasp `getAuthorizedOAuth2Client`): a
         // saved entry with a missing/empty access token is kept when a
-        // refresh token exists — the client refreshes lazily at the FIRST API
-        // request (`getRequestMetadataAsync`), never at init, so `logout` and
-        // `login` stay network-free even when the refresh token is broken.
+        // refresh token exists, and NO refresh happens at init — the client
+        // refreshes lazily at the FIRST API request (`getRequestMetadataAsync`
+        // + `isTokenExpiring`), so `logout` and `login` stay network-free even
+        // when the stored token is expired or the refresh token is broken.
         // Only an entry with nothing to refresh with is discarded.
         if credentials.as_ref().is_some_and(|current| {
             current.access_token.as_deref().is_none_or(str::is_empty)
                 && current.refresh_token.is_none()
         }) {
             credentials = None;
-        }
-        if let Some(current) = credentials.as_ref()
-            && current
-                .expiry_date
-                .is_some_and(|expiry| expiry <= now_millis())
-            && current.refresh_token.is_some()
-        {
-            let client = env_oauth_client();
-            credentials = Some(
-                refresh_and_save(&client, current, &store, user, &reqwest::Client::new()).await?,
-            );
         }
         let token = credentials
             .as_ref()
@@ -78,10 +68,15 @@ impl Clasp {
         let refresh_user = user.to_string();
         let refresh_credentials = Arc::new(Mutex::new(credentials.clone()));
         let refresh_credentials_for_closure = Arc::clone(&refresh_credentials);
+        let expiry_cell: crate::api::client::ExpiryCell = Arc::new(Mutex::new(
+            credentials.as_ref().and_then(|value| value.expiry_date),
+        ));
+        let expiry_cell_for_closure = Arc::clone(&expiry_cell);
         let refresh: RefreshFn = std::sync::Arc::new(move || {
             let store = refresh_store.clone();
             let user = refresh_user.clone();
             let credentials_state = Arc::clone(&refresh_credentials_for_closure);
+            let expiry_cell = Arc::clone(&expiry_cell_for_closure);
             let credentials = credentials_state.lock().unwrap().clone();
             Box::pin(async move {
                 let credentials = credentials.ok_or_else(|| {
@@ -103,11 +98,15 @@ impl Clasp {
                     .access_token
                     .clone()
                     .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))?;
+                *expiry_cell.lock().unwrap() = refreshed.expiry_date;
                 *credentials_state.lock().unwrap() = Some(refreshed);
                 Ok(access_token)
             })
         });
-        let client = ApiClient::new(ApiClientConfig::new(token, refresh))?;
+        let client = ApiClient::new(ApiClientConfig {
+            token_expiry: Some(expiry_cell),
+            ..ApiClientConfig::new(token, refresh)
+        })?;
         Ok(Arc::new(Self {
             config,
             client,
@@ -150,11 +149,4 @@ fn resolve_file_or_dir(path: &Path, filename: &str) -> PathBuf {
     } else {
         path.to_path_buf()
     }
-}
-
-fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_millis() as i64)
-        .unwrap_or_default()
 }

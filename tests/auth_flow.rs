@@ -1604,3 +1604,238 @@ async fn entry_without_any_token_stays_logged_out_at_init() {
         "a tokenless entry must stay discarded"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fix round 2: lazy refresh on expiry (no network at init) and userinfo
+// parity for show-authorized-user (clasp `getUserInfo` →
+// `getRequestMetadataAsync`/`getAccessToken` semantics).
+// ---------------------------------------------------------------------------
+
+fn expired_token_store() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let store_path = dir.path().join(".clasprc.json");
+    let expired = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        - 60_000;
+    let entry = format!(
+        r#"{{"tokens": {{"default": {{"type": "authorized_user", "access_token": "OLD", "refresh_token": "REFRESH-LOGIN", "expiry_date": {expired}}}}}}}"#
+    );
+    std::fs::write(&store_path, entry).unwrap();
+    (dir, store_path)
+}
+
+#[tokio::test]
+async fn expired_token_entry_refreshes_at_first_request_like_clasp() {
+    let server = wiremock::MockServer::start().await;
+    token_mock(
+        &server,
+        200,
+        serde_json::json!({"access_token": "ACCESS-REFRESHED-AT-FIRST-USE", "expires_in": 3600}),
+    )
+    .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/projects/script/content"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "// ok\\n"}]}),
+            ),
+        )
+        .mount(&server)
+        .await;
+    let (_dir, store_path) = expired_token_store();
+    let _env = api_base_env_guard(&server.uri());
+    let context = crsp::core::clasp::Clasp::init_context(
+        None,
+        None,
+        Some(&store_path),
+        "default",
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    // NO refresh at init despite the expired token: the entry is kept as-is.
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        0,
+        "init must not refresh expired tokens"
+    );
+    let credentials = context.credentials.as_ref().expect("entry kept");
+    assert_eq!(credentials.access_token.as_deref(), Some("OLD"));
+    // First API request: exactly one refresh POST, then the call with the
+    // fresh bearer (google-auth-library `isTokenExpiring` at request time).
+    context
+        .client
+        .script()
+        .get_content("script", None)
+        .await
+        .expect("the expired-token refresh makes the API call succeed");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "one refresh POST + one API call");
+    assert_eq!(requests[0].url.path(), "/token");
+    assert_eq!(requests[1].url.path(), "/v1/projects/script/content");
+    assert_eq!(
+        requests[1]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer ACCESS-REFRESHED-AT-FIRST-USE")
+    );
+    // The refreshed entry is persisted with the refresh token kept.
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
+    assert_eq!(
+        saved["tokens"]["default"]["access_token"],
+        "ACCESS-REFRESHED-AT-FIRST-USE"
+    );
+    assert_eq!(saved["tokens"]["default"]["refresh_token"], "REFRESH-LOGIN");
+}
+
+#[tokio::test]
+async fn logout_with_expired_token_entry_succeeds_offline() {
+    // Same lockout guard as round 1, now for expired tokens: logout is a pure
+    // store delete with no network, even when the stored token is expired and
+    // the refresh would fail (the wiremock has NO mocks mounted).
+    let server = wiremock::MockServer::start().await;
+    let (_dir, store_path) = expired_token_store();
+    let _env = api_base_env_guard(&server.uri());
+    let context = crsp::core::clasp::Clasp::init_context(
+        None,
+        None,
+        Some(&store_path),
+        "default",
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    let result = crsp::auth::logout(&context.store, "default").await.unwrap();
+    assert!(result.deleted, "the expired-token entry must be deleted");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
+    assert!(
+        saved["tokens"].get("default").is_none(),
+        "entry removed from the store: {saved}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        0,
+        "logout must not touch the network"
+    );
+}
+
+#[tokio::test]
+async fn show_authorized_user_refreshes_lazily_and_shows_real_email() {
+    let server = wiremock::MockServer::start().await;
+    token_mock(
+        &server,
+        200,
+        serde_json::json!({"access_token": "ACCESS-REFRESHED-AT-FIRST-USE", "expires_in": 3600}),
+    )
+    .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/userinfo"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer ACCESS-REFRESHED-AT-FIRST-USE",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id": "1234567890", "email": USER_EMAIL})),
+        )
+        .mount(&server)
+        .await;
+    let (guard, store) = store_in_temp();
+    let credentials = StoredCredentials {
+        credential_type: Some("authorized_user".to_string()),
+        refresh_token: Some("REFRESH-LOGIN".to_string()),
+        ..StoredCredentials::default()
+    };
+    store.save("default", Some(&credentials)).await.unwrap();
+    let endpoints = AuthEndpoints {
+        userinfo_url: format!("{}/userinfo", server.uri()),
+        token_url: format!("{}/token", server.uri()),
+        ..AuthEndpoints::default()
+    };
+    let payload = flow::show_authorized_user(
+        Some(credentials),
+        Some(&store),
+        "default",
+        &reqwest::Client::new(),
+        &endpoints,
+    )
+    .await
+    .unwrap();
+    // clasp refreshes inside `getUserInfo` (via the client's
+    // `getRequestMetadataAsync`) and shows the real email.
+    assert!(payload.logged_in);
+    assert_eq!(payload.email.as_deref(), Some(USER_EMAIL));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "one refresh POST + one userinfo GET");
+    assert_eq!(requests[0].url.path(), "/token");
+    let pairs = form_pairs(&requests[0]);
+    assert_form_contains(&pairs, "grant_type", "refresh_token");
+    assert_eq!(requests[1].url.path(), "/userinfo");
+    assert_eq!(
+        requests[1]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer ACCESS-REFRESHED-AT-FIRST-USE")
+    );
+    // The refreshed entry is persisted (spec §7.4 save-on-success).
+    let saved = store.load("default").await.unwrap().unwrap();
+    assert_eq!(
+        saved.access_token.as_deref(),
+        Some("ACCESS-REFRESHED-AT-FIRST-USE")
+    );
+    drop(guard);
+}
+
+#[tokio::test]
+async fn show_authorized_user_refresh_failure_shows_unknown_user_like_clasp() {
+    // clasp `getUserInfo` catches refresh failures → undefined → "You are
+    // logged in as an unknown user." with exit 0 (the output rendering is
+    // pinned by the auth-show-authorized-user-unknown golden); the command
+    // must NOT fail.
+    let server = wiremock::MockServer::start().await;
+    token_mock(&server, 400, serde_json::json!({"error": "invalid_grant"})).await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/userinfo"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let (guard, store) = store_in_temp();
+    let credentials = StoredCredentials {
+        credential_type: Some("authorized_user".to_string()),
+        refresh_token: Some("REFRESH-LOGIN".to_string()),
+        ..StoredCredentials::default()
+    };
+    store.save("default", Some(&credentials)).await.unwrap();
+    let endpoints = AuthEndpoints {
+        userinfo_url: format!("{}/userinfo", server.uri()),
+        token_url: format!("{}/token", server.uri()),
+        ..AuthEndpoints::default()
+    };
+    let payload = flow::show_authorized_user(
+        Some(credentials),
+        Some(&store),
+        "default",
+        &reqwest::Client::new(),
+        &endpoints,
+    )
+    .await
+    .unwrap();
+    assert!(payload.logged_in, "the entry itself is still valid");
+    assert_eq!(
+        payload.email, None,
+        "unknown user (clasp getUserInfo catch)"
+    );
+    // Only the (failed) refresh POST happened; userinfo was never called.
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/token");
+    drop(guard);
+}

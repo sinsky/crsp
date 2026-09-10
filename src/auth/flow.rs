@@ -486,11 +486,13 @@ pub async fn refresh_and_save(
     Ok(updated)
 }
 
-/// Fetches the account email via userinfo (clasp `getUserInfo`): every
-/// failure degrades to `None`. A 401 triggers exactly one token refresh with
-/// save-on-success (spec §7.4), matching google-auth-library's automatic
-/// refresh through clasp's tokens-event handler; a refresh failure keeps the
-/// old token and still degrades to `None`.
+/// Fetches the account email via userinfo (clasp `getUserInfo`, which calls
+/// the google-auth client's `request` → `getRequestMetadataAsync`): every
+/// failure degrades to `None` (unknown user, exit 0). The token is refreshed
+/// lazily BEFORE the userinfo call when it is missing or expiring (google
+/// auth-library `getAccessToken` semantics), and a 401 triggers exactly one
+/// token refresh with save-on-success (spec §7.4); a refresh failure still
+/// degrades to `None`.
 pub async fn fetch_user_email(
     credentials: &StoredCredentials,
     store: Option<&CredentialStore>,
@@ -498,8 +500,25 @@ pub async fn fetch_user_email(
     http: &reqwest::Client,
     endpoints: &AuthEndpoints,
 ) -> Option<String> {
-    let access_token = credentials.access_token.as_deref()?;
-    match userinfo_request(http, &endpoints.userinfo_url, access_token).await {
+    // google-auth-library `getAccessToken`: refresh when the access token is
+    // falsy or expiring (eager-refresh threshold), before the request. clasp's
+    // `getUserInfo` catches any refresh failure → unknown user (`None`).
+    let mut token = credentials.access_token.clone().unwrap_or_default();
+    let expiring = credentials.expiry_date.is_some_and(|expiry| {
+        expiry <= unix_millis() + crate::api::client::EAGER_REFRESH_THRESHOLD_MS
+    });
+    if (token.is_empty() || expiring) && credentials.refresh_token.is_some() {
+        let store = store?;
+        let client = lazy_refresh_client(credentials, endpoints);
+        let refreshed = refresh_and_save(&client, credentials, store, user, http)
+            .await
+            .ok()?;
+        token = refreshed.access_token.unwrap_or_default();
+    }
+    if token.is_empty() {
+        return None;
+    }
+    match userinfo_request(http, &endpoints.userinfo_url, &token).await {
         UserInfoOutcome::Email(email) => return Some(email),
         UserInfoOutcome::Failed => return None,
         UserInfoOutcome::Unauthorized => {}
@@ -526,6 +545,24 @@ pub async fn fetch_user_email(
     {
         UserInfoOutcome::Email(email) => Some(email),
         _ => None,
+    }
+}
+
+/// The lazy pre-send refresh client (clasp `getAuthorizedOAuth2Client`): the
+/// stored client id/secret when the entry has them, the default clasp client
+/// otherwise (the established fallback for refresh-token-only entries).
+fn lazy_refresh_client(credentials: &StoredCredentials, endpoints: &AuthEndpoints) -> OAuthClient {
+    OAuthClient {
+        client_id: credentials
+            .client_id
+            .clone()
+            .unwrap_or_else(|| crate::constants::DEFAULT_OAUTH_CLIENT_ID.to_string()),
+        client_secret: credentials
+            .client_secret
+            .clone()
+            .unwrap_or_else(|| crate::constants::DEFAULT_OAUTH_CLIENT_SECRET.to_string()),
+        endpoints: endpoints.clone(),
+        redirect_uri: DEFAULT_REDIRECT_URI.to_string(),
     }
 }
 
