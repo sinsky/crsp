@@ -36,9 +36,13 @@ impl Clasp {
         allow_symlinks: bool,
     ) -> Result<Arc<Self>, CrspError> {
         let cwd = std::env::current_dir()?;
-        let project = project.filter(|path| path.exists());
         let mut config = ProjectConfig::discover(project, &cwd).await?;
         if let Some(ignore) = ignore {
+            if !ignore.exists() {
+                return Err(CrspError::Config(crate::i18n::invalid_ignore_path(
+                    &ignore.to_string_lossy(),
+                )));
+            }
             config.ignore_file_path = Some(resolve_file_or_dir(
                 ignore,
                 crate::constants::PROJECT_IGNORE_FILENAME,

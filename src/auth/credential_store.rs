@@ -294,14 +294,17 @@ fn write_securely(path: &Path, content: &[u8], allow_symlinks: bool) -> Result<(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        options.mode(0o600);
+        if !allow_symlinks {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
     }
 
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) => {
             #[cfg(unix)]
-            if error.raw_os_error() == Some(libc::ELOOP) {
+            if !allow_symlinks && error.raw_os_error() == Some(libc::ELOOP) {
                 // O_NOFOLLOW caught a symlink swapped in after the pre-check.
                 return Err(CrspError::Auth(i18n::credential_path_symlink_detected(
                     &path.to_string_lossy(),

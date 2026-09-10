@@ -8,9 +8,9 @@ use tempfile::tempdir;
 fn push_watch_pins_the_clasp_debounce_timer_and_banner() {
     // clamp the spec §2.6 values: 500ms debounce and the `Waiting for
     // changes...` banner (clasp push.ts:141) so drift fails the suite.
-    assert_eq!(crsp::commands::push::WATCH_DEBOUNCE_MS, 500);
+    assert_eq!(google_clasp_rs::commands::push::WATCH_DEBOUNCE_MS, 500);
     assert_eq!(
-        crsp::commands::push::MESSAGE_WAITING_FOR_CHANGES,
+        google_clasp_rs::commands::push::MESSAGE_WAITING_FOR_CHANGES,
         "Waiting for changes..."
     );
 }
@@ -22,14 +22,15 @@ fn watcher_ignore_matching_uses_project_root_for_src_dir() {
     std::fs::create_dir(&content).unwrap();
     let ignored = content.join("ignored.js");
     let tracked = content.join("tracked.js");
-    let matcher = crsp::core::ignore::IgnoreMatcher::from_patterns(["src/ignored.js"]).unwrap();
+    let matcher =
+        google_clasp_rs::core::ignore::IgnoreMatcher::from_patterns(["src/ignored.js"]).unwrap();
 
-    assert!(!crsp::commands::push::is_tracked_event_path(
+    assert!(!google_clasp_rs::commands::push::is_tracked_event_path(
         directory.path(),
         &matcher,
         &ignored,
     ));
-    assert!(crsp::commands::push::is_tracked_event_path(
+    assert!(google_clasp_rs::commands::push::is_tracked_event_path(
         directory.path(),
         &matcher,
         &tracked,
@@ -45,7 +46,7 @@ async fn watcher_filter_rejects_ignored_src_dir_events() {
     let ignored = content.join("ignored.js");
     let seen = Arc::new(Mutex::new(0));
     let received = Arc::clone(&seen);
-    let stop = crsp::commands::push::watch_files_filtered(
+    let stop = google_clasp_rs::commands::push::watch_files_filtered(
         &content,
         Duration::from_millis(40),
         move |path| path.file_name().and_then(|name| name.to_str()) != Some("ignored.js"),
@@ -77,7 +78,7 @@ async fn notify_watch_reports_one_burst_after_debounce() {
     std::fs::write(&file, "function main() {}\n").unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let received = Arc::clone(&seen);
-    let stop = crsp::commands::push::watch_files_filtered(
+    let stop = google_clasp_rs::commands::push::watch_files_filtered(
         directory.path(),
         Duration::from_millis(50),
         |_| true,
@@ -111,7 +112,7 @@ async fn ignored_events_do_not_trigger_callback() {
     let file = directory.path().join("ignored.txt");
     let seen = Arc::new(Mutex::new(0));
     let received = Arc::clone(&seen);
-    let stop = crsp::commands::push::watch_files_filtered(
+    let stop = google_clasp_rs::commands::push::watch_files_filtered(
         directory.path(),
         Duration::from_millis(40),
         |path| path.extension().and_then(|ext| ext.to_str()) != Some("txt"),
@@ -139,7 +140,7 @@ async fn ignored_events_do_not_trigger_callback() {
 #[tokio::test]
 async fn watcher_errors_are_propagated() {
     let directory = tempdir().unwrap();
-    let result = crsp::commands::push::watch_files_filtered(
+    let result = google_clasp_rs::commands::push::watch_files_filtered(
         &directory.path().join("missing"),
         Duration::from_millis(10),
         |_| true,

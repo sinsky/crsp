@@ -13,15 +13,17 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use serde_json::json;
 
-use crsp::api::{ApiClient, ApiClientConfig, ApiErrorKind, ApiRequest, BaseUrls, PagedResults};
-use crsp::auth::oauth_client::OAuthClient;
-use crsp::constants::{
+use google_clasp_rs::api::{
+    ApiClient, ApiClientConfig, ApiErrorKind, ApiRequest, BaseUrls, PagedResults,
+};
+use google_clasp_rs::auth::oauth_client::OAuthClient;
+use google_clasp_rs::constants::{
     DISCOVERY_API_BASE_URL, DRIVE_API_BASE_URL, ENV_API_BASE_URL, ENV_DISCOVERY_BASE_URL,
     ENV_DRIVE_BASE_URL, ENV_LOGGING_BASE_URL, ENV_OAUTH2_BASE_URL, ENV_SCRIPT_BASE_URL,
     ENV_SERVICE_USAGE_BASE_URL, ENV_USERINFO_BASE_URL, LOGGING_API_BASE_URL, OAUTH2_API_BASE_URL,
     SCRIPT_API_BASE_URL, SERVICE_USAGE_API_BASE_URL, USERINFO_API_BASE_URL,
 };
-use crsp::error::CrspError;
+use google_clasp_rs::error::CrspError;
 use tokio::io::AsyncWriteExt as _;
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -183,7 +185,7 @@ fn default_oauth_client(token_base: &str) -> OAuthClient {
         client_id: "CLIENT-ID-PLACEHOLDER".to_string(),
         client_secret: "CLIENT-SECRET-PLACEHOLDER".to_string(),
         redirect_uri: "http://localhost".to_string(),
-        endpoints: crsp::auth::oauth_client::AuthEndpoints {
+        endpoints: google_clasp_rs::auth::oauth_client::AuthEndpoints {
             auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_url: format!("{token_base}/token"),
             userinfo_url: format!("{token_base}/v2/userinfo"),
@@ -318,7 +320,7 @@ async fn update_content_puts_file_list() {
         .script()
         .update_content(
             "s1",
-            &[crsp::api::PushFile {
+            &[google_clasp_rs::api::PushFile {
                 name: "Code".to_string(),
                 file_type: "SERVER_JS".to_string(),
                 source: "function f(){}".to_string(),
@@ -1321,7 +1323,7 @@ async fn put_retries_idempotently() {
         .script()
         .update_content(
             "s1",
-            &[crsp::api::PushFile {
+            &[google_clasp_rs::api::PushFile {
                 name: "Code".to_string(),
                 file_type: "SERVER_JS".to_string(),
                 source: "x".to_string(),
@@ -1460,7 +1462,9 @@ async fn post_never_retries_network_errors() {
         .request(ApiRequest {
             method: reqwest::Method::POST,
             url,
-            body: Some(crsp::api::ApiBody::Json(json!({"description": "d"}))),
+            body: Some(google_clasp_rs::api::ApiBody::Json(
+                json!({"description": "d"}),
+            )),
         })
         .await
         .expect_err("closed port fails");

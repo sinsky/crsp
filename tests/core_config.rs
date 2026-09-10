@@ -3,14 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crsp::constants::{
+use google_clasp_rs::constants::{
     PROJECT_CONFIG_FILENAME, PROJECT_IGNORE_FILENAME, PROJECT_MANIFEST_FILENAME,
 };
-use crsp::core::config::ProjectConfig;
-use crsp::core::ignore::IgnoreMatcher;
-use crsp::core::manifest::{EnabledAdvancedService, Manifest};
-use crsp::core::pagination::{Page, PageOptions, fetch_pages};
-use crsp::error::CrspError;
+use google_clasp_rs::core::config::ProjectConfig;
+use google_clasp_rs::core::ignore::IgnoreMatcher;
+use google_clasp_rs::core::manifest::{EnabledAdvancedService, Manifest};
+use google_clasp_rs::core::pagination::{Page, PageOptions, fetch_pages};
+use google_clasp_rs::error::CrspError;
 
 fn temp_root() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -271,6 +271,32 @@ async fn discover_rejects_missing_explicit_path() {
     assert_eq!(
         message,
         "Invalid --project path: /nonexistent/crsp-test-project. File or directory does not exist."
+    );
+}
+
+#[tokio::test]
+async fn clasp_init_context_rejects_missing_ignore_path() {
+    let missing = PathBuf::from("/nonexistent/crsp-test-ignore");
+    let error = match google_clasp_rs::core::clasp::Clasp::init_context(
+        None,
+        Some(&missing),
+        None,
+        "default",
+        false,
+        false,
+    )
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("expected Err"),
+    };
+    let message = match error {
+        CrspError::Config(message) => message,
+        other => panic!("expected Config error, got {other:?}"),
+    };
+    assert_eq!(
+        message,
+        "Invalid --ignore path: /nonexistent/crsp-test-ignore. File or directory does not exist."
     );
 }
 
@@ -795,7 +821,7 @@ async fn pagination_mid_page_errors_propagate() {
             match (call, token.as_deref()) {
                 (1, None) => Ok(page(vec![1], Some("t1"))),
                 _ => Err(CrspError::Api {
-                    kind: crsp::error::ApiErrorKind::UnexpectedApiError,
+                    kind: google_clasp_rs::error::ApiErrorKind::UnexpectedApiError,
                     message: "boom".to_string(),
                 }),
             }
@@ -818,9 +844,9 @@ async fn pagination_defaults_match_clasp_and_service_usage_overrides() {
     assert_eq!(options.max_pages, 10);
     // Service Usage (list-apis) uses pageSize 200 / maxResults 10000.
     let options = PageOptions {
-        page_size: crsp::core::pagination::SERVICE_USAGE_PAGE_SIZE,
+        page_size: google_clasp_rs::core::pagination::SERVICE_USAGE_PAGE_SIZE,
         max_pages: 10,
-        max_results: crsp::core::pagination::SERVICE_USAGE_MAX_RESULTS,
+        max_results: google_clasp_rs::core::pagination::SERVICE_USAGE_MAX_RESULTS,
     };
     assert_eq!(options.page_size, 200);
     assert_eq!(options.max_results, 10000);

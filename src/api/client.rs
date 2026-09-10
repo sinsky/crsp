@@ -158,15 +158,28 @@ impl ApiResponse {
 
 fn parse_body<T: DeserializeOwned>(text: &str) -> Result<T, CrspError> {
     let trimmed = text.trim();
-    let value = if trimmed.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(trimmed).unwrap_or(Value::Null)
-    };
-    serde_json::from_value(value.clone())
-        .or_else(|_| serde_json::from_value::<T>(Value::Null))
-        .or_else(|_| serde_json::from_value::<T>(Value::Object(Default::default())))
-        .map_err(parse_error)
+    if trimmed.is_empty() {
+        // Empty bodies degrade to `null`/empty-object, matching the tolerant
+        // clasp parsing (missing fields default via serde).
+        return serde_json::from_value::<T>(Value::Null)
+            .or_else(|_| serde_json::from_value::<T>(Value::Object(Default::default())))
+            .map_err(parse_error);
+    }
+    // Fast path: deserialize straight from the raw text into the target type
+    // with no intermediate `Value` AST and no deep clone (the common case for
+    // every API response, including multi-MB content payloads).
+    match serde_json::from_str::<T>(trimmed) {
+        Ok(parsed) => Ok(parsed),
+        Err(_) => {
+            // Tolerant fallback: some fixtures carry unknown shapes (extra
+            // fields are ignored by the direct path already); degrade to
+            // `null`/empty-object for structurally unexpected JSON, exactly
+            // as the old `Value::Null` fallback did.
+            serde_json::from_value::<T>(Value::Null)
+                .or_else(|_| serde_json::from_value::<T>(Value::Object(Default::default())))
+                .map_err(parse_error)
+        }
+    }
 }
 
 /// The authenticated Google API client (spec §2.2). Typed service accessors
@@ -175,7 +188,7 @@ fn parse_body<T: DeserializeOwned>(text: &str) -> Result<T, CrspError> {
 pub struct ApiClient {
     pub(crate) http: reqwest::Client,
     base_urls: BaseUrls,
-    access_token: StdMutex<String>,
+    access_token: Arc<StdMutex<String>>,
     token_expiry: Option<ExpiryCell>,
     refresh: RefreshFn,
     sleeper: SleepFn,
@@ -189,9 +202,7 @@ impl Clone for ApiClient {
         Self {
             http: self.http.clone(),
             base_urls: self.base_urls.clone(),
-            access_token: StdMutex::new(
-                self.access_token.lock().expect("access token lock").clone(),
-            ),
+            access_token: Arc::clone(&self.access_token),
             token_expiry: self.token_expiry.clone(),
             refresh: Arc::clone(&self.refresh),
             sleeper: Arc::clone(&self.sleeper),
@@ -229,7 +240,7 @@ impl ApiClient {
         Ok(Self {
             http,
             base_urls,
-            access_token: StdMutex::new(config.access_token),
+            access_token: Arc::new(StdMutex::new(config.access_token)),
             token_expiry: config.token_expiry,
             refresh: config.refresh,
             sleeper: config.sleeper.unwrap_or_else(default_sleeper),

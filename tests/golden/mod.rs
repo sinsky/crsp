@@ -230,7 +230,7 @@ pub async fn register(server: &MockServer, transcript: &[TranscriptEntry]) {
 /// secret (it is published by clasp); the client secret is masked as hygiene.
 fn secret_values(dir: &Path) -> Vec<String> {
     let mut secrets = Vec::new();
-    secrets.push(crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET.to_string());
+    secrets.push(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET.to_string());
     for key in [
         "access_token",
         "refresh_token",

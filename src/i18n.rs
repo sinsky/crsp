@@ -30,6 +30,11 @@ pub fn invalid_project_path(path: &str) -> String {
     format!("Invalid --project path: {path}. File or directory does not exist.")
 }
 
+/// `Invalid --ignore path: {path}. File or directory does not exist.`
+pub fn invalid_ignore_path(path: &str) -> String {
+    format!("Invalid --ignore path: {path}. File or directory does not exist.")
+}
+
 /// Multi-line error thrown when a `.clasp.json` content directory escapes the
 /// project root (clasp `clasp.ts:215-220`).
 pub fn src_dir_escapes_project_root(raw: &str, resolved: &str, root: &str) -> String {

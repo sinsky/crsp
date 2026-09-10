@@ -10,21 +10,21 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crsp::api::{ApiClient, ApiClientConfig, BaseUrls};
-use crsp::commands::clone_script::{CloneArgs, clone_script};
-use crsp::commands::create_deployment::{CreateDeploymentArgs, create_deployment};
-use crsp::commands::create_script::{CreateScriptArgs, create_script};
-use crsp::commands::create_version::create_version;
-use crsp::commands::delete_deployment::delete_deployment;
-use crsp::commands::delete_script::delete_script;
-use crsp::commands::list_deployments::list_deployments;
-use crsp::commands::list_scripts::list_scripts;
-use crsp::commands::list_versions::list_versions;
-use crsp::commands::shared::{ellipsize, extract_script_id};
-use crsp::commands::update_deployment::{UpdateDeploymentArgs, update_deployment};
-use crsp::core::config::ProjectConfig;
-use crsp::output::Output;
-use crsp::ui::{
+use google_clasp_rs::api::{ApiClient, ApiClientConfig, BaseUrls};
+use google_clasp_rs::commands::clone_script::{CloneArgs, clone_script};
+use google_clasp_rs::commands::create_deployment::{CreateDeploymentArgs, create_deployment};
+use google_clasp_rs::commands::create_script::{CreateScriptArgs, create_script};
+use google_clasp_rs::commands::create_version::create_version;
+use google_clasp_rs::commands::delete_deployment::delete_deployment;
+use google_clasp_rs::commands::delete_script::delete_script;
+use google_clasp_rs::commands::list_deployments::list_deployments;
+use google_clasp_rs::commands::list_scripts::list_scripts;
+use google_clasp_rs::commands::list_versions::list_versions;
+use google_clasp_rs::commands::shared::{ellipsize, extract_script_id};
+use google_clasp_rs::commands::update_deployment::{UpdateDeploymentArgs, update_deployment};
+use google_clasp_rs::core::config::ProjectConfig;
+use google_clasp_rs::output::Output;
+use google_clasp_rs::ui::{
     PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect,
     PromptSpinner, Ui,
 };
@@ -34,7 +34,7 @@ use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 fn api_client(base: &str) -> ApiClient {
-    let refresh: crsp::api::RefreshFn =
+    let refresh: google_clasp_rs::api::RefreshFn =
         std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
     ApiClient::with_base_urls(
         ApiClientConfig::new("token", refresh),
@@ -520,7 +520,7 @@ async fn clone_honors_configured_script_extensions() {
 
     // Round-trip: a push on the cloned tree collects the written file.
     config.script_id = Some("script".to_string());
-    let collected = crsp::core::files::collect_local_files(&config)
+    let collected = google_clasp_rs::core::files::collect_local_files(&config)
         .await
         .unwrap();
     let code = collected

@@ -162,6 +162,9 @@ impl McpServer {
     }
 
     fn validate_project(&self, project_dir: &str) -> Result<PathBuf, String> {
+        if project_dir.trim().is_empty() {
+            return Err("Project directory is required.".to_string());
+        }
         let home =
             home_dir().ok_or_else(|| "Unable to determine the user home directory.".to_string())?;
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;

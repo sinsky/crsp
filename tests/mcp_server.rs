@@ -661,6 +661,15 @@ async fn tool_calls_reject_project_dirs_outside_the_jail() {
     server.cancel().await.unwrap();
 }
 
+#[tokio::test]
+async fn tool_calls_reject_empty_project_dir() {
+    let (client, server) = connected().await;
+    let result = call_complete(&client, "push_files", json!({"projectDir": "   "})).await;
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(text(&result, 0), "Project directory is required.");
+    server.cancel().await.unwrap();
+}
+
 async fn connected_with_urls_and_refresh(
     urls: BaseUrls,
     access_token: &str,

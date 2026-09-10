@@ -7,9 +7,9 @@
 
 use std::path::Path;
 
-use crsp::auth::credential_store::{CredentialStore, StoredCredentials};
-use crsp::auth::flow;
-use crsp::error::CrspError;
+use google_clasp_rs::auth::credential_store::{CredentialStore, StoredCredentials};
+use google_clasp_rs::auth::flow;
+use google_clasp_rs::error::CrspError;
 
 const ACCESS_V1: &str = "ACCESS-PLACEHOLDER-V1";
 const ACCESS_V3: &str = "ACCESS-PLACEHOLDER-V3";
@@ -194,11 +194,11 @@ async fn load_v1_global_fallback_injects_default_client_and_reads_typo_field() {
     // V1 global files never stored a client; the default clasp client is used.
     assert_eq!(
         loaded.client_id.as_deref(),
-        Some(crsp::constants::DEFAULT_OAUTH_CLIENT_ID)
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID)
     );
     assert_eq!(
         loaded.client_secret.as_deref(),
-        Some(crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET)
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET)
     );
     assert_eq!(loaded.credential_type.as_deref(), Some("authorized_user"));
 }
@@ -417,6 +417,23 @@ async fn delete_rejects_symlinks_too() {
     assert_auth_error_contains(error, "Security Error");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn save_allows_symlinks_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("real-clasprc.json");
+    write_file(&target, r#"{"tokens": {}}"#);
+    let link = dir.path().join("link.clasprc.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let store = CredentialStore::new(&link, true);
+    store
+        .save("default", Some(&v3_credentials()))
+        .await
+        .unwrap();
+    let loaded = store.load("default").await.unwrap();
+    assert!(loaded.is_some());
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn save_and_load_round_trip_without_posix_modes_on_windows() {
@@ -446,8 +463,9 @@ async fn token_mock(server: &wiremock::MockServer, status: u16, body: serde_json
 async fn refresh_success_saves_new_access_token_and_keeps_refresh_token() {
     let (guard, store) = temp_store();
     let mut credentials = v3_credentials();
-    credentials.client_id = Some(crsp::constants::DEFAULT_OAUTH_CLIENT_ID.to_string());
-    credentials.client_secret = Some(crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET.to_string());
+    credentials.client_id = Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID.to_string());
+    credentials.client_secret =
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET.to_string());
     store.save("default", Some(&credentials)).await.unwrap();
 
     let server = wiremock::MockServer::start().await;
@@ -462,7 +480,7 @@ async fn refresh_success_saves_new_access_token_and_keeps_refresh_token() {
     )
     .await;
 
-    let client = crsp::auth::oauth_client::OAuthClient::default_client()
+    let client = google_clasp_rs::auth::oauth_client::OAuthClient::default_client()
         .with_token_url(format!("{}/token", server.uri()));
     let http = reqwest::Client::new();
     let updated = flow::refresh_and_save(&client, &credentials, &store, "default", &http)
@@ -512,7 +530,7 @@ async fn refresh_failure_keeps_the_old_token_and_prompts_relogin() {
     )
     .await;
 
-    let client = crsp::auth::oauth_client::OAuthClient::default_client()
+    let client = google_clasp_rs::auth::oauth_client::OAuthClient::default_client()
         .with_token_url(format!("{}/token", server.uri()));
     let http = reqwest::Client::new();
     let error = flow::refresh_and_save(&client, &credentials, &store, "default", &http)
@@ -535,7 +553,7 @@ async fn refresh_without_a_stored_refresh_token_prompts_relogin() {
     };
     store.save("default", Some(&credentials)).await.unwrap();
     let before = read_file(store.path());
-    let client = crsp::auth::oauth_client::OAuthClient::default_client();
+    let client = google_clasp_rs::auth::oauth_client::OAuthClient::default_client();
     let http = reqwest::Client::new();
     let error = flow::refresh_and_save(&client, &credentials, &store, "default", &http)
         .await

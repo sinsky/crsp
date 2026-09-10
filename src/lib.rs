@@ -12,7 +12,7 @@ pub mod text;
 pub mod ui;
 
 use crate::auth::flow::{AuthOptions, validate_scope_options};
-use crate::auth::{CredentialStore, login, logout, show_authorized_user};
+use crate::auth::{login, logout, show_authorized_user};
 use crate::cli::*;
 use crate::commands::shared::{SystemOpener, include_user_hint_in_url};
 use crate::core::clasp::Clasp;
@@ -61,7 +61,7 @@ async fn run_async(cli: &Cli) -> Result<(), CrspError> {
         Some(Commands::StartMcpServer) => crate::mcp::start_server(&context)
             .await
             .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string()))),
-        Some(Commands::Login(args)) => run_login(cli, args).await,
+        Some(Commands::Login(args)) => run_login(cli, args, &context).await,
         Some(Commands::Logout) => run_logout(cli, &context).await,
         Some(Commands::ShowAuthorizedUser) => run_show_user(cli, &context).await,
         Some(command) => run_command(cli, command, context).await,
@@ -77,12 +77,27 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("tokio runtime")
 }
 
-async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
+async fn run_login(
+    cli: &Cli,
+    args: &LoginArgs,
+    context: &std::sync::Arc<Clasp>,
+) -> Result<(), CrspError> {
     validate_scope_options(args.use_project_scopes, args.include_clasp_scopes)?;
-    let store = CredentialStore::new(
-        auth_path(cli.globals.auth.as_deref())?,
-        cli.globals.allow_symlinks,
-    );
+    let store = &context.store;
+    let manifest_scopes = if args.use_project_scopes {
+        let manifest_path = context
+            .config
+            .content_dir
+            .join(crate::constants::PROJECT_MANIFEST_FILENAME);
+        if manifest_path.exists() {
+            let manifest = crate::core::manifest::Manifest::read(&manifest_path).await?;
+            manifest.oauth_scopes()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let options = AuthOptions {
         no_localhost: args.no_localhost,
         creds_file: args.creds.clone().map(Into::into),
@@ -100,8 +115,8 @@ async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
         crate::auth::oauth_client::AuthEndpoints::from_base_urls(&crate::api::BaseUrls::from_env());
     let payload = login(
         &options,
-        None,
-        &store,
+        manifest_scopes.as_deref(),
+        store,
         &cli.globals.user,
         &ui,
         &mut output,
@@ -488,20 +503,4 @@ async fn run_command(
         | Commands::External(_) => unreachable!(),
     }
     Ok(())
-}
-
-fn auth_path(auth: Option<&str>) -> Result<std::path::PathBuf, CrspError> {
-    let path = auth
-        .map(Path::new)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| {
-            home::home_dir()
-                .unwrap_or_default()
-                .join(crate::constants::CREDENTIALS_FILENAME)
-        });
-    Ok(if path.is_dir() {
-        path.join(crate::constants::CREDENTIALS_FILENAME)
-    } else {
-        path
-    })
 }

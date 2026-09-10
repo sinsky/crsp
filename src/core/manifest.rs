@@ -61,6 +61,19 @@ impl Manifest {
         &self.root
     }
 
+    /// OAuth scopes specified in the manifest, if any.
+    pub fn oauth_scopes(&self) -> Option<Vec<String>> {
+        self.root
+            .get("oauthScopes")
+            .and_then(Value::as_array)
+            .map(|scopes| {
+                scopes
+                    .iter()
+                    .filter_map(|s| s.as_str().map(ToString::to_string))
+                    .collect()
+            })
+    }
+
     /// The currently enabled advanced services, skipping malformed entries.
     pub fn enabled_advanced_services(&self) -> Vec<EnabledAdvancedService> {
         self.root

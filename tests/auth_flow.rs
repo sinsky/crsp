@@ -13,14 +13,18 @@ use std::time::Duration;
 use base64::Engine as _;
 use sha2::Digest as _;
 
-use crsp::auth::credential_store::{CredentialStore, StoredCredentials};
-use crsp::auth::flow;
-use crsp::auth::localhost_flow::LocalhostListener;
-use crsp::auth::oauth_client::{AuthEndpoints, OAuthClient, OAuthClientType, client_type};
-use crsp::auth::serverless_flow;
-use crsp::error::CrspError;
-use crsp::output::Output;
-use crsp::ui::{PromptAdapter, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect, Ui};
+use google_clasp_rs::auth::credential_store::{CredentialStore, StoredCredentials};
+use google_clasp_rs::auth::flow;
+use google_clasp_rs::auth::localhost_flow::LocalhostListener;
+use google_clasp_rs::auth::oauth_client::{
+    AuthEndpoints, OAuthClient, OAuthClientType, client_type,
+};
+use google_clasp_rs::auth::serverless_flow;
+use google_clasp_rs::error::CrspError;
+use google_clasp_rs::output::Output;
+use google_clasp_rs::ui::{
+    PromptAdapter, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect, Ui,
+};
 
 const USER_EMAIL: &str = "user@example.com";
 const ACCESS_LOGIN: &str = "ACCESS-PLACEHOLDER-LOGIN";
@@ -85,7 +89,7 @@ impl PromptAdapter for FakeAdapter {
         Err(std::io::Error::other("unexpected multi_select"))
     }
 
-    fn confirm(&self, _spec: &crsp::ui::PromptConfirm) -> std::io::Result<bool> {
+    fn confirm(&self, _spec: &google_clasp_rs::ui::PromptConfirm) -> std::io::Result<bool> {
         Err(std::io::Error::other("unexpected confirm"))
     }
 
@@ -93,7 +97,7 @@ impl PromptAdapter for FakeAdapter {
         Err(std::io::Error::other("unexpected dialog"))
     }
 
-    fn spinner<T, F>(&self, _spec: crsp::ui::PromptSpinner, _f: F) -> std::io::Result<T>
+    fn spinner<T, F>(&self, _spec: google_clasp_rs::ui::PromptSpinner, _f: F) -> std::io::Result<T>
     where
         F: FnOnce() -> T + Send,
         T: Send,
@@ -278,15 +282,18 @@ fn generate_code_verifier_is_url_safe_and_43_chars() {
 #[test]
 fn default_client_uses_the_clasp_client_and_is_google_provided() {
     let client = OAuthClient::default_client();
-    assert_eq!(client.client_id, crsp::constants::DEFAULT_OAUTH_CLIENT_ID);
+    assert_eq!(
+        client.client_id,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID
+    );
     assert_eq!(
         client.client_secret,
-        crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET
     );
     assert_eq!(client.redirect_uri, "http://localhost");
     assert_eq!(client.client_type(), OAuthClientType::GoogleProvided);
     assert_eq!(
-        client_type(Some(crsp::constants::DEFAULT_OAUTH_CLIENT_ID)),
+        client_type(Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID)),
         Some(OAuthClientType::GoogleProvided)
     );
     assert_eq!(client_type(None), None);
@@ -417,12 +424,12 @@ async fn exchange_code_posts_the_authorization_code_grant() {
     assert_form_contains(
         &pairs,
         "client_id",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_ID,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID,
     );
     assert_form_contains(
         &pairs,
         "client_secret",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET,
     );
 }
 
@@ -458,12 +465,12 @@ async fn refresh_posts_the_refresh_token_grant() {
     assert_form_contains(
         &pairs,
         "client_id",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_ID,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID,
     );
     assert_form_contains(
         &pairs,
         "client_secret",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET,
     );
 }
 
@@ -947,11 +954,11 @@ async fn login_completes_the_localhost_flow_end_to_end() {
     assert_eq!(saved.credential_type.as_deref(), Some("authorized_user"));
     assert_eq!(
         saved.client_id.as_deref(),
-        Some(crsp::constants::DEFAULT_OAUTH_CLIENT_ID)
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID)
     );
     assert_eq!(
         saved.client_secret.as_deref(),
-        Some(crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET)
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET)
     );
     // clasp saves no expiry_date on the initial login.
     assert_eq!(saved.expiry_date, None);
@@ -1332,7 +1339,7 @@ async fn show_authorized_user_reports_client_classification() {
     assert_eq!(google.client_type, Some(OAuthClientType::GoogleProvided));
     assert_eq!(
         google.client_id.as_deref(),
-        Some(crsp::constants::DEFAULT_OAUTH_CLIENT_ID)
+        Some(google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID)
     );
     let json = serde_json::to_value(&google).unwrap();
     assert_eq!(json["clientType"], "google-provided");
@@ -1474,7 +1481,7 @@ async fn refresh_token_only_entry_refreshes_at_first_request_like_clasp() {
         .await;
     let (_dir, store_path) = refresh_only_store();
     let _env = api_base_env_guard(&server.uri());
-    let context = crsp::core::clasp::Clasp::init_context(
+    let context = google_clasp_rs::core::clasp::Clasp::init_context(
         None,
         None,
         Some(&store_path),
@@ -1511,12 +1518,12 @@ async fn refresh_token_only_entry_refreshes_at_first_request_like_clasp() {
     assert_form_contains(
         &pairs,
         "client_id",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_ID,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_ID,
     );
     assert_form_contains(
         &pairs,
         "client_secret",
-        crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET,
+        google_clasp_rs::constants::DEFAULT_OAUTH_CLIENT_SECRET,
     );
     assert_eq!(requests[1].url.path(), "/v1/projects/script/content");
     assert_eq!(
@@ -1552,7 +1559,7 @@ async fn logout_with_refresh_token_only_entry_succeeds_offline() {
     let server = wiremock::MockServer::start().await;
     let (_dir, store_path) = refresh_only_store();
     let _env = api_base_env_guard(&server.uri());
-    let context = crsp::core::clasp::Clasp::init_context(
+    let context = google_clasp_rs::core::clasp::Clasp::init_context(
         None,
         None,
         Some(&store_path),
@@ -1562,7 +1569,9 @@ async fn logout_with_refresh_token_only_entry_succeeds_offline() {
     )
     .await
     .unwrap();
-    let result = crsp::auth::logout(&context.store, "default").await.unwrap();
+    let result = google_clasp_rs::auth::logout(&context.store, "default")
+        .await
+        .unwrap();
     assert!(result.deleted, "the refresh-only entry must be deleted");
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
@@ -1589,7 +1598,7 @@ async fn entry_without_any_token_stays_logged_out_at_init() {
         r#"{"tokens": {"default": {"type": "authorized_user"}}}"#,
     )
     .unwrap();
-    let context = crsp::core::clasp::Clasp::init_context(
+    let context = google_clasp_rs::core::clasp::Clasp::init_context(
         None,
         None,
         Some(&store_path),
@@ -1646,7 +1655,7 @@ async fn expired_token_entry_refreshes_at_first_request_like_clasp() {
         .await;
     let (_dir, store_path) = expired_token_store();
     let _env = api_base_env_guard(&server.uri());
-    let context = crsp::core::clasp::Clasp::init_context(
+    let context = google_clasp_rs::core::clasp::Clasp::init_context(
         None,
         None,
         Some(&store_path),
@@ -1701,7 +1710,7 @@ async fn logout_with_expired_token_entry_succeeds_offline() {
     let server = wiremock::MockServer::start().await;
     let (_dir, store_path) = expired_token_store();
     let _env = api_base_env_guard(&server.uri());
-    let context = crsp::core::clasp::Clasp::init_context(
+    let context = google_clasp_rs::core::clasp::Clasp::init_context(
         None,
         None,
         Some(&store_path),
@@ -1711,7 +1720,9 @@ async fn logout_with_expired_token_entry_succeeds_offline() {
     )
     .await
     .unwrap();
-    let result = crsp::auth::logout(&context.store, "default").await.unwrap();
+    let result = google_clasp_rs::auth::logout(&context.store, "default")
+        .await
+        .unwrap();
     assert!(result.deleted, "the expired-token entry must be deleted");
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();

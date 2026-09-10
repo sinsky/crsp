@@ -1,16 +1,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crsp::api::{ApiClient, ApiClientConfig, BaseUrls};
-use crsp::commands::show_file_status::show_file_status;
-use crsp::commands::{pull::pull as pull_command, push::push as push_command};
-use crsp::core::config::ProjectConfig;
-use crsp::core::files::{
-    LocalExtensions, LocalFile, PullFile, SkipReason, WriteFault, collect_local_files,
-    get_changed_files, pull_file, pull_file_with_fault, pull_files,
+use google_clasp_rs::api::{ApiClient, ApiClientConfig, BaseUrls};
+use google_clasp_rs::commands::show_file_status::show_file_status;
+use google_clasp_rs::commands::{pull::pull as pull_command, push::push as push_command};
+use google_clasp_rs::core::config::ProjectConfig;
+use google_clasp_rs::core::files::{
+    LocalExtensions, LocalFile, PullFile, PullFileFailure, SkipReason, WriteFault,
+    collect_local_files, get_changed_files, pull_file, pull_file_with_fault, pull_files,
 };
-use crsp::output::Output;
-use crsp::ui::{
+use google_clasp_rs::output::Output;
+use google_clasp_rs::ui::{
     PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect,
     PromptSpinner, Ui,
 };
@@ -19,7 +19,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn api_client(base: &str) -> ApiClient {
-    let refresh: crsp::api::RefreshFn =
+    let refresh: google_clasp_rs::api::RefreshFn =
         std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
     ApiClient::with_base_urls(
         ApiClientConfig::new("token", refresh),
@@ -261,7 +261,7 @@ fn locale_sort_vector_matches_ruling() {
         LocalFile::new("appsscript.json", "appsscript", "JSON", ""),
         LocalFile::new("Bar.gs", "Bar", "SERVER_JS", ""),
     ];
-    crsp::core::files::sort_for_test(&mut files, &[]);
+    google_clasp_rs::core::files::sort_for_test(&mut files, &[]);
     assert_eq!(
         files
             .iter()
@@ -479,7 +479,7 @@ fn syntax_error_extraction_includes_source_line() {
         "SERVER_JS",
         "one\ntwo\nthree",
     )];
-    let snippet = crsp::core::files::syntax_error_snippet(
+    let snippet = google_clasp_rs::core::files::syntax_error_snippet(
         "Syntax error: Missing ; line: 2 file: Code",
         &files,
     )
@@ -697,7 +697,7 @@ async fn public_pull_result_preserves_all_skip_reasons() {
             Some(WriteFault::RaceCondition),
             &LocalExtensions::clasp_defaults(),
         ),
-        Err(SkipReason::RaceCondition)
+        Err(PullFileFailure::Skipped(SkipReason::RaceCondition))
     );
     assert_eq!(
         pull_file_with_fault(
@@ -707,7 +707,7 @@ async fn public_pull_result_preserves_all_skip_reasons() {
             Some(WriteFault::SymlinkLoop),
             &LocalExtensions::clasp_defaults(),
         ),
-        Err(SkipReason::SymlinkLoop)
+        Err(PullFileFailure::Skipped(SkipReason::SymlinkLoop))
     );
     assert_eq!(fs::read_to_string(src.join("target.js")).unwrap(), "before");
 }
@@ -772,7 +772,7 @@ async fn status_compresses_untracked_files_to_common_parent() {
     show_file_status(
         temp.path(),
         &config(temp.path()),
-        &Ui::new(crsp::ui::DemandAdapter),
+        &Ui::new(google_clasp_rs::ui::DemandAdapter),
         &mut output,
     )
     .await
@@ -810,6 +810,23 @@ async fn allow_symlinks_follows_directory_links() {
                 .iter()
                 .any(|file| file.local_path == "linked/linked.js")
         );
+    }
+}
+
+#[tokio::test]
+async fn allow_symlinks_handles_circular_symlinks_without_infinite_loop() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("code.js"), "code").unwrap();
+        symlink(&src, src.join("loop")).unwrap();
+        let mut configured = config(temp.path());
+        configured.allow_symlinks = true;
+        let result = collect_local_files(&configured).await.unwrap();
+        assert!(result.files.iter().any(|file| file.local_path == "code.js"));
     }
 }
 
@@ -970,7 +987,7 @@ async fn status_paths_are_cwd_relative_like_clasp() {
     show_file_status(
         temp.path(),
         &src_config(temp.path()),
-        &Ui::new(crsp::ui::DemandAdapter),
+        &Ui::new(google_clasp_rs::ui::DemandAdapter),
         &mut output,
     )
     .await
@@ -1006,12 +1023,12 @@ async fn pull_prints_files_and_pulled_count_like_clasp() {
         "{\"scriptId\":\"script\",\"rootDir\":\"src\"}",
     )
     .unwrap();
-    let remote: Vec<crsp::core::project::RemoteFile> = vec![
-        crsp::core::project::RemoteFile {
+    let remote: Vec<google_clasp_rs::core::project::RemoteFile> = vec![
+        google_clasp_rs::core::project::RemoteFile {
             file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
             local_path: "src/Code.js".to_string(),
         },
-        crsp::core::project::RemoteFile {
+        google_clasp_rs::core::project::RemoteFile {
             file: PullFile::new("appsscript", "JSON", "{}"),
             local_path: "src/appsscript.json".to_string(),
         },
@@ -1050,10 +1067,11 @@ async fn pull_delete_prints_deleted_lines_and_cwd_relative_paths() {
     let src = temp.path().join("src");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("Unused.js"), "unused").unwrap();
-    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
-        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
-        local_path: "src/Code.js".to_string(),
-    }];
+    let remote: Vec<google_clasp_rs::core::project::RemoteFile> =
+        vec![google_clasp_rs::core::project::RemoteFile {
+            file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+            local_path: "src/Code.js".to_string(),
+        }];
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(false, &mut out, &mut err);
@@ -1089,10 +1107,11 @@ async fn pull_json_lists_cwd_relative_pulled_files() {
         .await;
     let temp = TempDir::new().unwrap();
     fs::create_dir_all(temp.path().join("src")).unwrap();
-    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
-        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
-        local_path: "src/Code.js".to_string(),
-    }];
+    let remote: Vec<google_clasp_rs::core::project::RemoteFile> =
+        vec![google_clasp_rs::core::project::RemoteFile {
+            file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+            local_path: "src/Code.js".to_string(),
+        }];
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(true, &mut out, &mut err);
@@ -1127,10 +1146,11 @@ async fn pull_warns_on_collect_time_symlinks_like_clasp() {
     fs::create_dir_all(&src).unwrap();
     fs::write(temp.path().join("outside.js"), "outside").unwrap();
     symlink(temp.path().join("outside.js"), src.join("link.js")).unwrap();
-    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
-        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
-        local_path: "src/Code.js".to_string(),
-    }];
+    let remote: Vec<google_clasp_rs::core::project::RemoteFile> =
+        vec![google_clasp_rs::core::project::RemoteFile {
+            file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+            local_path: "src/Code.js".to_string(),
+        }];
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(false, &mut out, &mut err);
@@ -1186,10 +1206,11 @@ async fn pull_warns_on_write_skips_like_clasp() {
     fs::create_dir_all(&src).unwrap();
     fs::create_dir_all(&outside).unwrap();
     symlink(&outside, src.join("nested")).unwrap();
-    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
-        file: PullFile::new("nested/Code", "SERVER_JS", "bad"),
-        local_path: "src/nested/Code.js".to_string(),
-    }];
+    let remote: Vec<google_clasp_rs::core::project::RemoteFile> =
+        vec![google_clasp_rs::core::project::RemoteFile {
+            file: PullFile::new("nested/Code", "SERVER_JS", "bad"),
+            local_path: "src/nested/Code.js".to_string(),
+        }];
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut output = Output::new(false, &mut out, &mut err);
@@ -1221,8 +1242,8 @@ async fn pull_warns_on_write_skips_like_clasp() {
 fn skip_reason_stderr_wording_matches_clasp() {
     // clasp pull.ts:81-90 / clone-script.ts:107-117 reason mapping (spec
     // §9.4: every skip reason's stderr wording pinned).
-    use crsp::commands::shared::write_skip_reason_text;
-    use crsp::core::files::SkipReason;
+    use google_clasp_rs::commands::shared::write_skip_reason_text;
+    use google_clasp_rs::core::files::SkipReason;
     assert_eq!(
         write_skip_reason_text(SkipReason::ParentSymlink),
         "parent directory contains a symbolic link"

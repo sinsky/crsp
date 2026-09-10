@@ -13,20 +13,20 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crsp::api::{ApiClient, ApiClientConfig, BaseUrls, SleepFn};
-use crsp::commands::disable_api::disable_api;
-use crsp::commands::enable_api::enable_api;
-use crsp::commands::list_apis::list_apis;
-use crsp::commands::run_function::{RunFunctionArgs, run_function};
-use crsp::commands::setup_logs::setup_logs;
-use crsp::commands::shared::UrlOpener;
-use crsp::commands::tail_logs::{
+use google_clasp_rs::api::{ApiClient, ApiClientConfig, BaseUrls, SleepFn};
+use google_clasp_rs::commands::disable_api::disable_api;
+use google_clasp_rs::commands::enable_api::enable_api;
+use google_clasp_rs::commands::list_apis::list_apis;
+use google_clasp_rs::commands::run_function::{RunFunctionArgs, run_function};
+use google_clasp_rs::commands::setup_logs::setup_logs;
+use google_clasp_rs::commands::shared::UrlOpener;
+use google_clasp_rs::commands::tail_logs::{
     POLL_INTERVAL_MS, PollState, TailLogsArgs, format_local_time, local_utc_offset, tail_logs,
 };
-use crsp::core::config::ProjectConfig;
-use crsp::error::CrspError;
-use crsp::output::Output;
-use crsp::ui::{
+use google_clasp_rs::core::config::ProjectConfig;
+use google_clasp_rs::error::CrspError;
+use google_clasp_rs::output::Output;
+use google_clasp_rs::ui::{
     PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect, PromptSelect,
     PromptSpinner, Ui,
 };
@@ -36,7 +36,7 @@ use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 fn api_client(base: &str) -> ApiClient {
-    let refresh: crsp::api::RefreshFn =
+    let refresh: google_clasp_rs::api::RefreshFn =
         std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
     ApiClient::with_base_urls(
         ApiClientConfig::new("token", refresh),
@@ -1409,8 +1409,8 @@ async fn tail_logs_watch_sleeps_interval_and_dedupes_across_polls() {
     });
     let polls = RefCell::new(0);
     let mut state = PollState::default();
-    let no_spinner: Option<&crsp::ui::Ui<TestPrompt>> = None;
-    let mut poller = crsp::commands::tail_logs::LogPoller::new(
+    let no_spinner: Option<&google_clasp_rs::ui::Ui<TestPrompt>> = None;
+    let mut poller = google_clasp_rs::commands::tail_logs::LogPoller::new(
         &client,
         "proj",
         false,
@@ -1706,10 +1706,10 @@ async fn open_script_non_tty_prints_manual_line_without_launching() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_script::open_script(
+    google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         false,
         &Ui::new(TestPrompt::default()),
         &opener,
@@ -1736,10 +1736,10 @@ async fn open_script_json_prints_url_and_keeps_the_line() {
     let mut out = Vec::new();
     let mut output = Output::new(true, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_script::open_script(
+    google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs {
+        google_clasp_rs::commands::open_script::OpenScriptArgs {
             script_id: Some("abc123"),
         },
         false,
@@ -1767,10 +1767,10 @@ async fn open_script_tty_launches_browser_and_prints_opening_line() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_script::open_script(
+    google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         true,
         &Ui::new(TestPrompt::interactive()),
         &opener,
@@ -1792,10 +1792,10 @@ async fn open_script_tty_launches_browser_and_prints_opening_line() {
     let mut out = Vec::new();
     let mut output = Output::new(true, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_script::open_script(
+    google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         true,
         &Ui::new(TestPrompt::interactive()),
         &opener,
@@ -1818,10 +1818,10 @@ async fn open_script_tty_launch_failure_propagates() {
     let config = gcp_config(temp.path(), "proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let result = crsp::commands::open_script::open_script(
+    let result = google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         false,
         &Ui::new(TestPrompt::interactive()),
         &FailingOpener,
@@ -1845,10 +1845,10 @@ async fn open_script_requires_script_id() {
     config.script_id = None;
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let error = crsp::commands::open_script::open_script(
+    let error = google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         false,
         &Ui::new(TestPrompt::default()),
         &RecordingOpener::default(),
@@ -1867,7 +1867,7 @@ async fn open_container_requires_parent_id_and_builds_drive_url() {
     let config = gcp_config(temp.path(), "proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let error = crsp::commands::open_container::open_container(
+    let error = google_clasp_rs::commands::open_container::open_container(
         &client,
         &config,
         false,
@@ -1886,7 +1886,7 @@ async fn open_container_requires_parent_id_and_builds_drive_url() {
     config.parent_id = Some("doc123".to_string());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    crsp::commands::open_container::open_container(
+    google_clasp_rs::commands::open_container::open_container(
         &client,
         &config,
         false,
@@ -1910,7 +1910,7 @@ async fn open_logs_builds_cloud_console_url() {
     let mut config = gcp_config(temp.path(), "gcp-proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    crsp::commands::open_logs::open_logs(
+    google_clasp_rs::commands::open_logs::open_logs(
         &client,
         &mut config,
         false,
@@ -1934,7 +1934,7 @@ async fn open_api_console_builds_dashboard_url() {
     let mut config = gcp_config(temp.path(), "gcp-proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    crsp::commands::open_api_console::open_api_console(
+    google_clasp_rs::commands::open_api_console::open_api_console(
         &client,
         &mut config,
         false,
@@ -1958,7 +1958,7 @@ async fn open_credentials_setup_builds_credentials_url() {
     let mut config = gcp_config(temp.path(), "gcp-proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    crsp::commands::open_credentials_setup::open_credentials_setup(
+    google_clasp_rs::commands::open_credentials_setup::open_credentials_setup(
         &client,
         &mut config,
         false,
@@ -2014,10 +2014,10 @@ async fn open_web_app_sorts_choices_by_update_time_ascending() {
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
     let ui = Ui::new(prompt);
-    crsp::commands::open_web_app::open_web_app(
+    google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: None,
         },
         false,
@@ -2083,10 +2083,10 @@ async fn open_web_app_argument_skips_selection_and_gets_entry_points() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_web_app::open_web_app(
+    google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: Some("dep-1"),
         },
         false,
@@ -2120,10 +2120,10 @@ async fn open_web_app_errors_when_no_web_app_entry_point() {
     let config = gcp_config(temp.path(), "proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let error = crsp::commands::open_web_app::open_web_app(
+    let error = google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: Some("dep-1"),
         },
         false,
@@ -2145,10 +2145,10 @@ async fn open_web_app_requires_deployment_id_noninteractive() {
     let config = gcp_config(temp.path(), "proj");
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let error = crsp::commands::open_web_app::open_web_app(
+    let error = google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: None,
         },
         false,
@@ -2170,10 +2170,10 @@ async fn open_web_app_requires_script_id() {
     config.script_id = None;
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let error = crsp::commands::open_web_app::open_web_app(
+    let error = google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: Some("dep-1"),
         },
         false,
@@ -2205,7 +2205,7 @@ fn include_user_hint_in_url_parses_env_values() {
     ] {
         let _env = hints_env(value);
         assert_eq!(
-            crsp::commands::shared::include_user_hint_in_url(),
+            google_clasp_rs::commands::shared::include_user_hint_in_url(),
             expected,
             "CLASP_ENABLE_USER_HINTS={value:?}"
         );
@@ -2221,7 +2221,7 @@ async fn open_hints_disabled_makes_no_userinfo_request() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_logs::open_logs(
+    google_clasp_rs::commands::open_logs::open_logs(
         &client,
         &mut config,
         false,
@@ -2253,10 +2253,10 @@ async fn open_hints_userinfo_failure_sets_empty_auth_user() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_script::open_script(
+    google_clasp_rs::commands::open_script::open_script(
         &client,
         &config,
-        crsp::commands::open_script::OpenScriptArgs { script_id: None },
+        google_clasp_rs::commands::open_script::OpenScriptArgs { script_id: None },
         true,
         &Ui::new(TestPrompt::default()),
         &opener,
@@ -2444,10 +2444,10 @@ async fn open_web_app_pre_existing_auth_user_param_is_appended_divergence() {
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     let opener = RecordingOpener::default();
-    crsp::commands::open_web_app::open_web_app(
+    google_clasp_rs::commands::open_web_app::open_web_app(
         &client,
         &config,
-        crsp::commands::open_web_app::OpenWebAppArgs {
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
             deployment_id: Some("dep-1"),
         },
         true,

@@ -6,9 +6,9 @@
 
 use assert_cmd::Command;
 use clap::Parser;
-use crsp::cli::Commands;
-use crsp::error::CrspError;
-use crsp::{Cli, run};
+use google_clasp_rs::cli::Commands;
+use google_clasp_rs::error::CrspError;
+use google_clasp_rs::{Cli, run};
 use predicates::prelude::PredicateBooleanExt;
 
 fn crsp_bin() -> Command {
@@ -118,7 +118,7 @@ const ALIASES: &[(&str, &str)] = &[
 #[test]
 fn project_name_constant_matches_the_cli_literals() {
     // about/override_usage clap attributes are literals; guard against drift.
-    assert_eq!(crsp::constants::PROJECT_NAME, "crsp");
+    assert_eq!(google_clasp_rs::constants::PROJECT_NAME, "crsp");
 }
 
 #[test]

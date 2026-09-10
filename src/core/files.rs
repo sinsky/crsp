@@ -96,10 +96,52 @@ pub struct PushResult {
     pub up_to_date: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DirId {
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+    #[cfg(not(unix))]
+    canonical: PathBuf,
+}
+
+impl DirId {
+    fn from_path(path: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = fs::metadata(path)?;
+            Ok(Self {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let canonical = fs::canonicalize(path)?;
+            Ok(Self { canonical })
+        }
+    }
+}
+
 pub async fn collect_local_files(
     config: &ProjectConfig,
 ) -> Result<CollectLocalFilesResult, CrspError> {
+    // Heavy local traversal + full file reads block the calling thread, so
+    // offload to the blocking pool: `collect_local_files` is awaited from
+    // Tokio workers (push/status/pull) alongside MCP/signal tasks.
     let matcher = config.ignore_matcher().await?;
+    let config = config.clone();
+    tokio::task::spawn_blocking(move || collect_local_files_blocking(&config, &matcher))
+        .await
+        .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))?
+}
+
+fn collect_local_files_blocking(
+    config: &ProjectConfig,
+    matcher: &crate::core::ignore::IgnoreMatcher,
+) -> Result<CollectLocalFilesResult, CrspError> {
     let root = config.content_dir.clone();
     let allow = config.allow_symlinks;
     if !allow
@@ -116,11 +158,16 @@ pub async fn collect_local_files(
         });
     }
     let mut entries = Vec::new();
+    let mut visited = HashSet::new();
+    if let Ok(id) = DirId::from_path(&root) {
+        visited.insert(id);
+    }
     collect_entries(
         &root,
         &root,
         config.skip_subdirectories,
         allow,
+        &mut visited,
         &mut entries,
     )?;
     entries.sort();
@@ -204,6 +251,7 @@ fn collect_entries(
     current: &Path,
     shallow: bool,
     allow: bool,
+    visited: &mut HashSet<DirId>,
     output: &mut Vec<(String, PathBuf, bool)>,
 ) -> Result<(), CrspError> {
     for entry in fs::read_dir(current)? {
@@ -219,8 +267,12 @@ fn collect_entries(
             if allow {
                 let metadata = fs::metadata(&path);
                 if let Ok(metadata) = metadata {
-                    if metadata.is_dir() && !shallow {
-                        collect_entries(root, &path, false, true, output)?;
+                    if metadata.is_dir()
+                        && !shallow
+                        && let Ok(id) = DirId::from_path(&path)
+                        && visited.insert(id)
+                    {
+                        collect_entries(root, &path, false, true, visited, output)?;
                     } else if metadata.is_file() {
                         output.push((relative, path, true));
                     }
@@ -229,8 +281,11 @@ fn collect_entries(
                 output.push((relative, path, true));
             }
         } else if file_type.is_dir() {
-            if !shallow {
-                collect_entries(root, &path, false, allow, output)?;
+            if !shallow
+                && let Ok(id) = DirId::from_path(&path)
+                && visited.insert(id)
+            {
+                collect_entries(root, &path, false, allow, visited, output)?;
             }
         } else {
             output.push((relative, path, false));
@@ -353,6 +408,18 @@ impl LocalExtensions {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum PullFileFailure {
+    Skipped(SkipReason),
+    Io(String),
+}
+
+impl From<SkipReason> for PullFileFailure {
+    fn from(reason: SkipReason) -> Self {
+        Self::Skipped(reason)
+    }
+}
+
 pub async fn pull_file(
     content_dir: &Path,
     allow_symlinks: bool,
@@ -361,7 +428,8 @@ pub async fn pull_file(
 ) -> Result<Option<String>, CrspError> {
     match pull_file_with_fault(content_dir, allow_symlinks, file, None, extensions) {
         Ok(value) => Ok(value),
-        Err(_) => Ok(None),
+        Err(PullFileFailure::Skipped(_)) => Ok(None),
+        Err(PullFileFailure::Io(err)) => Err(CrspError::Io(std::io::Error::other(err))),
     }
 }
 
@@ -371,15 +439,15 @@ pub fn pull_file_with_fault(
     file: &PullFile,
     fault: Option<WriteFault>,
     extensions: &LocalExtensions,
-) -> Result<Option<String>, SkipReason> {
+) -> Result<Option<String>, PullFileFailure> {
     let name = extensions.local_name(file);
     let Some(target) = PathJail::remote_target_path(content_dir, &name) else {
-        return Err(SkipReason::OutsideContentDir);
+        return Err(SkipReason::OutsideContentDir.into());
     };
     if let Some(fault) = fault {
         return Err(match fault {
-            WriteFault::RaceCondition => SkipReason::RaceCondition,
-            WriteFault::SymlinkLoop => SkipReason::SymlinkLoop,
+            WriteFault::RaceCondition => SkipReason::RaceCondition.into(),
+            WriteFault::SymlinkLoop => SkipReason::SymlinkLoop.into(),
         });
     }
     if !allow_symlinks
@@ -387,7 +455,7 @@ pub fn pull_file_with_fault(
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
     {
-        return Err(SkipReason::TargetSymlink);
+        return Err(SkipReason::TargetSymlink.into());
     }
     if !allow_symlinks {
         let mut current = target.parent().unwrap_or(content_dir);
@@ -396,7 +464,7 @@ pub fn pull_file_with_fault(
                 .map(|metadata| metadata.file_type().is_symlink())
                 .unwrap_or(false)
             {
-                return Err(SkipReason::ParentSymlink);
+                return Err(SkipReason::ParentSymlink.into());
             }
             current = current.parent().unwrap_or(content_dir);
         }
@@ -419,21 +487,21 @@ fn write_remote_file(
     target: &Path,
     allow_symlinks: bool,
     source: &str,
-) -> Result<(), SkipReason> {
+) -> Result<(), PullFileFailure> {
     if !allow_symlinks
         && fs::symlink_metadata(content_dir)
             .map(|metadata| metadata.file_type().is_symlink())
             .unwrap_or(false)
     {
-        return Err(SkipReason::ParentSymlink);
+        return Err(SkipReason::ParentSymlink.into());
     }
-    fs::create_dir_all(content_dir).map_err(|_| SkipReason::RaceCondition)?;
+    fs::create_dir_all(content_dir).map_err(|e| PullFileFailure::Io(e.to_string()))?;
     let real_content = fs::canonicalize(content_dir).map_err(|_| SkipReason::OutsideContentDir)?;
     let parent = target.parent().unwrap_or(content_dir);
-    if !verify_or_create_parent(parent, &real_content, allow_symlinks)
-        .map_err(|_| SkipReason::ParentSymlink)?
+    if !verify_or_create_parent(parent, content_dir, &real_content, allow_symlinks)
+        .map_err(|e| PullFileFailure::Io(e.to_string()))?
     {
-        return Err(SkipReason::ParentSymlink);
+        return Err(SkipReason::ParentSymlink.into());
     }
     let mut options = OpenOptions::new();
     options.write(true).create(true);
@@ -447,44 +515,50 @@ fn write_remote_file(
     }
     let mut file = match options.open(target) {
         Ok(file) => file,
+        #[cfg(unix)]
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-            return Err(SkipReason::SymlinkLoop);
+            return Err(SkipReason::SymlinkLoop.into());
         }
+        #[cfg(unix)]
         Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
-            return Err(SkipReason::RaceCondition);
+            return Err(SkipReason::RaceCondition.into());
         }
-        Err(_) => return Err(SkipReason::RaceCondition),
+        Err(error) => return Err(PullFileFailure::Io(error.to_string())),
     };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let fd_metadata = file.metadata().map_err(|_| SkipReason::RaceCondition)?;
-        let path_metadata = fs::metadata(target).map_err(|_| SkipReason::RaceCondition)?;
+        let fd_metadata = file
+            .metadata()
+            .map_err(|e| PullFileFailure::Io(e.to_string()))?;
+        let path_metadata = fs::metadata(target).map_err(|e| PullFileFailure::Io(e.to_string()))?;
         if fd_metadata.dev() != path_metadata.dev() || fd_metadata.ino() != path_metadata.ino() {
-            return Err(SkipReason::RaceCondition);
+            return Err(SkipReason::RaceCondition.into());
         }
         let real_target = fs::canonicalize(target).map_err(|error| {
             if error.raw_os_error() == Some(libc::ELOOP) {
-                SkipReason::SymlinkLoop
+                PullFileFailure::Skipped(SkipReason::SymlinkLoop)
             } else {
-                SkipReason::ParentSymlink
+                PullFileFailure::Skipped(SkipReason::ParentSymlink)
             }
         })?;
         if !allow_symlinks && !PathJail::is_inside(&real_content, &real_target) {
-            return Err(SkipReason::ParentSymlink);
+            return Err(SkipReason::ParentSymlink.into());
         }
     }
-    file.set_len(0).map_err(|_| SkipReason::RaceCondition)?;
+    file.set_len(0)
+        .map_err(|e| PullFileFailure::Io(e.to_string()))?;
     file.seek(SeekFrom::Start(0))
-        .map_err(|_| SkipReason::RaceCondition)?;
+        .map_err(|e| PullFileFailure::Io(e.to_string()))?;
     file.write_all(source.as_bytes())
-        .map_err(|_| SkipReason::RaceCondition)?;
+        .map_err(|e| PullFileFailure::Io(e.to_string()))?;
     Ok(())
 }
 
 fn verify_or_create_parent(
     parent: &Path,
     content_dir: &Path,
+    real_content: &Path,
     allow_symlinks: bool,
 ) -> Result<bool, CrspError> {
     if !allow_symlinks {
@@ -504,7 +578,8 @@ fn verify_or_create_parent(
         Err(error) => return Err(error.into()),
     }
     let resolved = fs::canonicalize(parent)?;
-    if !allow_symlinks && resolved != *content_dir && !PathJail::is_inside(content_dir, &resolved) {
+    if !allow_symlinks && resolved != *real_content && !PathJail::is_inside(real_content, &resolved)
+    {
         return Ok(false);
     }
     Ok(true)
@@ -529,19 +604,20 @@ pub async fn pull_files(
                 .map_err(|_| CrspError::Validation("write semaphore closed".to_string()))?;
             let outcome = tokio::task::spawn_blocking(move || {
                 match pull_file_with_fault(&content_dir, allow_symlinks, &file, None, &extensions) {
-                    Ok(Some(path)) => (Some(path), None),
-                    Ok(None) => (None, None),
-                    Err(reason) => (
+                    Ok(Some(path)) => Ok((Some(path), None)),
+                    Ok(None) => Ok((None, None)),
+                    Err(PullFileFailure::Skipped(reason)) => Ok((
                         None,
                         Some(SkippedFile {
                             local_path: file.remote_path,
                             reason,
                         }),
-                    ),
+                    )),
+                    Err(PullFileFailure::Io(err)) => Err(CrspError::Io(std::io::Error::other(err))),
                 }
             })
             .await
-            .map_err(|error| CrspError::Validation(error.to_string()))?;
+            .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))??;
             Ok::<_, CrspError>((index, outcome))
         }
     }))

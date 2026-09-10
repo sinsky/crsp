@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crsp::core::path::{PathJail, normalize_slashes, relative_path};
-use crsp::error::CrspError;
+use google_clasp_rs::core::path::{PathJail, normalize_slashes, relative_path};
+use google_clasp_rs::error::CrspError;
 
 // ---------------------------------------------------------------------------
 // component-aware containment

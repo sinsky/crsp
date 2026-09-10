@@ -4,11 +4,11 @@ use std::cell::{Cell, RefCell};
 use std::io::{self, IsTerminal};
 use std::path::Path;
 
-use crsp::api::{ApiClient, ApiClientConfig};
-use crsp::core::config::ProjectConfig;
-use crsp::error::CrspError;
-use crsp::text::humanize_title;
-use crsp::ui::{
+use google_clasp_rs::api::{ApiClient, ApiClientConfig};
+use google_clasp_rs::core::config::ProjectConfig;
+use google_clasp_rs::error::CrspError;
+use google_clasp_rs::text::humanize_title;
+use google_clasp_rs::ui::{
     DemandAdapter, PromptAdapter, PromptConfirm, PromptDialog, PromptInput, PromptMultiSelect,
     PromptSelect, PromptSpinner, Ui,
 };
@@ -373,11 +373,11 @@ fn configured_config(root: &Path) -> ProjectConfig {
 }
 
 fn api_client(base: &str) -> ApiClient {
-    let refresh: crsp::api::RefreshFn =
+    let refresh: google_clasp_rs::api::RefreshFn =
         std::sync::Arc::new(|| Box::pin(async { Ok("token".to_string()) }));
     ApiClient::with_base_urls(
         ApiClientConfig::new("token", refresh),
-        crsp::api::BaseUrls {
+        google_clasp_rs::api::BaseUrls {
             script: base.to_string(),
             drive: base.to_string(),
             service_usage: base.to_string(),
@@ -408,11 +408,17 @@ async fn list_versions_shows_the_spinner_message_on_an_interactive_adapter() {
     let temp = TempDir::new().unwrap();
     let config = configured_config(temp.path());
     let mut out = Vec::new();
-    let mut output = crsp::output::Output::new(false, &mut out, Vec::new());
+    let mut output = google_clasp_rs::output::Output::new(false, &mut out, Vec::new());
     let ui = Ui::new(FakeAdapter::interactive());
-    crsp::commands::list_versions::list_versions(&client, &config, None, &ui, &mut output)
-        .await
-        .unwrap();
+    google_clasp_rs::commands::list_versions::list_versions(
+        &client,
+        &config,
+        None,
+        &ui,
+        &mut output,
+    )
+    .await
+    .unwrap();
     let adapter = ui.into_adapter();
     assert_eq!(
         adapter.spinner_starts.borrow().clone(),
@@ -428,14 +434,14 @@ async fn pull_wraps_only_the_remote_pull_not_the_local_collect() {
     // The interactive adapter must therefore see exactly one spinner message.
     let temp = TempDir::new().unwrap();
     let config = configured_config(temp.path());
-    let remote = vec![crsp::core::project::RemoteFile {
-        file: crsp::core::files::PullFile::new("out.txt", "FILE", "hello"),
+    let remote = vec![google_clasp_rs::core::project::RemoteFile {
+        file: google_clasp_rs::core::files::PullFile::new("out.txt", "FILE", "hello"),
         local_path: "out.txt".to_string(),
     }];
     let mut out = Vec::new();
-    let mut output = crsp::output::Output::new(false, &mut out, Vec::new());
+    let mut output = google_clasp_rs::output::Output::new(false, &mut out, Vec::new());
     let ui = Ui::new(FakeAdapter::interactive());
-    crsp::commands::pull::pull(
+    google_clasp_rs::commands::pull::pull(
         &config,
         temp.path(),
         &remote,
