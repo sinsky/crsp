@@ -13,49 +13,6 @@ pub struct StatusPayload {
     pub untracked_files: Vec<String>,
 }
 
-pub fn sync_status(content_dir: &std::path::Path) -> Result<StatusPayload, CrspError> {
-    let mut files = Vec::new();
-    let mut untracked = Vec::new();
-    collect_sync(content_dir, content_dir, &mut files, &mut untracked)?;
-    files.sort();
-    Ok(StatusPayload {
-        files_to_push: files,
-        untracked_files: untracked,
-    })
-}
-
-fn collect_sync(
-    root: &std::path::Path,
-    current: &std::path::Path,
-    files: &mut Vec<String>,
-    untracked: &mut Vec<String>,
-) -> Result<(), CrspError> {
-    for entry in std::fs::read_dir(current)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            collect_sync(root, &path, files, untracked)?;
-        } else {
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if relative == "appsscript.json"
-                || matches!(
-                    path.extension().and_then(|ext| ext.to_str()),
-                    Some("js" | "gs" | "html")
-                )
-            {
-                files.push(relative);
-            } else {
-                untracked.push(relative);
-            }
-        }
-    }
-    Ok(())
-}
-
 pub async fn show_file_status<W: std::io::Write, E: std::io::Write>(
     config: &ProjectConfig,
     output: &mut Output<W, E>,

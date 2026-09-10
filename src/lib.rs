@@ -33,9 +33,6 @@ pub fn runtime_count() -> usize {
 }
 
 pub fn run(cli: &Cli) -> Result<(), CrspError> {
-    if matches!(cli.command, Some(Commands::ShowFileStatus)) {
-        return run_status_sync(cli);
-    }
     match &cli.command {
         None => {
             let help = Cli::command().render_help().to_string();
@@ -49,55 +46,6 @@ pub fn run(cli: &Cli) -> Result<(), CrspError> {
         }
         Some(_) => runtime().block_on(run_async(cli)),
     }
-}
-
-fn run_status_sync(cli: &Cli) -> Result<(), CrspError> {
-    let cwd = std::env::current_dir()?;
-    let config_path = cli
-        .globals
-        .project
-        .as_deref()
-        .map(Path::new)
-        .map(|path| {
-            if path.is_dir() {
-                path.join(crate::constants::PROJECT_CONFIG_FILENAME)
-            } else {
-                path.to_path_buf()
-            }
-        })
-        .unwrap_or_else(|| cwd.join(crate::constants::PROJECT_CONFIG_FILENAME));
-    if !config_path.exists() {
-        return Err(CrspError::Validation(
-            crate::i18n::PROJECT_SETTINGS_NOT_FOUND.to_string(),
-        ));
-    }
-    let content = std::fs::read_to_string(&config_path)?;
-    let value: serde_json::Value =
-        json5::from_str(&content).map_err(|error| CrspError::Config(error.to_string()))?;
-    let root = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let content_dir = root.join(
-        value
-            .get("srcDir")
-            .or_else(|| value.get("rootDir"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("."),
-    );
-    let tracked = crate::commands::show_file_status::sync_status(&content_dir)?;
-    let mut output = Output::stdout(cli.globals.json);
-    if output.is_json() {
-        output.print_json(&tracked)?;
-    } else {
-        output.message("Tracked files:");
-        for file in &tracked.files_to_push {
-            output.message(&format!("└─ {file}"));
-        }
-        output.message("Untracked files:");
-        for file in &tracked.untracked_files {
-            output.message(&format!("└─ {file}"));
-        }
-    }
-    Ok(())
 }
 
 async fn run_async(cli: &Cli) -> Result<(), CrspError> {

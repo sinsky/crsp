@@ -15,10 +15,23 @@ use crate::ui::{PromptAdapter, PromptConfirm, Ui};
 pub async fn watch_files<'a, F>(
     root: &Path,
     debounce: Duration,
+    callback: F,
+) -> Result<(), CrspError>
+where
+    F: FnMut(Vec<PathBuf>) -> Pin<Box<dyn Future<Output = Result<bool, CrspError>> + 'a>> + 'a,
+{
+    watch_files_filtered(root, debounce, |_| true, callback).await
+}
+
+pub async fn watch_files_filtered<'a, F, P>(
+    root: &Path,
+    debounce: Duration,
+    mut accepted: P,
     mut callback: F,
 ) -> Result<(), CrspError>
 where
     F: FnMut(Vec<PathBuf>) -> Pin<Box<dyn Future<Output = Result<bool, CrspError>> + 'a>> + 'a,
+    P: FnMut(&Path) -> bool,
 {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |result| {
@@ -48,9 +61,10 @@ where
                         }
                     }
                 }
+                paths.retain(|path| accepted(path));
                 paths.sort();
                 paths.dedup();
-                if !callback(paths).await? { return Ok(()); }
+                if !paths.is_empty() && !callback(paths).await? { return Ok(()); }
             }
         }
     }
@@ -102,11 +116,19 @@ pub async fn push<A: PromptAdapter>(
     let client_ref = client;
     let config_ref = config;
     let ui_ref = ui;
-    let output_ref = std::sync::Arc::new(std::sync::Mutex::new(output));
+    let output_ref = std::rc::Rc::new(std::cell::RefCell::new(output));
     let force_state = std::sync::Arc::new(std::sync::Mutex::new(force));
-    watch_files(
+    let ignore = config.ignore_matcher().await?;
+    let content_root = config.content_dir.clone();
+    watch_files_filtered(
         &config.content_dir,
         Duration::from_millis(500),
+        move |path| {
+            path.strip_prefix(&content_root)
+                .ok()
+                .map(|relative| ignore.is_tracked(&relative.to_string_lossy().replace('\\', "/")))
+                .unwrap_or(false)
+        },
         move |paths| {
             let relevant = paths.iter().any(|path| {
                 path.file_name().and_then(|name| name.to_str()) == Some("appsscript.json")
@@ -118,7 +140,7 @@ pub async fn push<A: PromptAdapter>(
                     })
             });
             let force_state = std::sync::Arc::clone(&force_state);
-            let output_ref = std::sync::Arc::clone(&output_ref);
+            let output_ref = std::rc::Rc::clone(&output_ref);
             Box::pin(async move {
                 if !relevant {
                     return Ok(true);
@@ -136,13 +158,12 @@ pub async fn push<A: PromptAdapter>(
                                 .to_string(),
                         default: false,
                     })? {
-                        output_ref.lock().unwrap().message("Skipping push.");
                         return Ok(false);
                     }
                     *force_state.lock().unwrap() = true;
                 }
                 put_push_files(client_ref, config_ref, &next).await?;
-                print_result(&next, *output_ref.lock().unwrap())?;
+                print_result(&next, *output_ref.borrow_mut())?;
                 Ok(true)
             })
         },

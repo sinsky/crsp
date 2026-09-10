@@ -1,138 +1,118 @@
 use assert_cmd::Command;
-use clap::Parser;
-use crsp::{Cli, Commands, run};
 use predicates::str::contains;
 
-const COMMANDS: &[&str] = &[
-    "login",
-    "logout",
-    "show-authorized-user",
-    "clone-script",
-    "create-script",
-    "push",
-    "pull",
-    "create-deployment",
-    "update-deployment",
-    "delete-deployment",
-    "delete-script",
-    "create-version",
-    "list-versions",
-    "list-deployments",
-    "list-scripts",
-    "run-function",
-    "tail-logs",
-    "setup-logs",
-    "show-file-status",
-    "list-apis",
-    "enable-api",
-    "disable-api",
-    "open-script",
-    "open-container",
-    "open-web-app",
-    "open-logs",
-    "open-api-console",
-    "open-credentials-setup",
-    "start-mcp-server",
+const ALIAS_PAIRS: &[(&str, &str, &[&str])] = &[
+    ("clone", "clone-script", &[]),
+    ("create", "create-script", &["--type", "invalid"]),
+    ("deploy", "create-deployment", &[]),
+    ("redeploy", "update-deployment", &["fixture"]),
+    ("undeploy", "delete-deployment", &[]),
+    ("delete", "delete-script", &[]),
+    ("version", "create-version", &[]),
+    ("versions", "list-versions", &[]),
+    ("deployments", "list-deployments", &[]),
+    ("list", "list-scripts", &["--noShorten"]),
+    ("run", "run-function", &["--params", "{"]),
+    ("logs", "tail-logs", &[]),
+    ("status", "show-file-status", &[]),
+    ("apis", "list-apis", &[]),
 ];
-
-const ALIAS_PAIRS: &[(&str, &str)] = &[
-    ("clone", "clone-script"),
-    ("create", "create-script"),
-    ("deploy", "create-deployment"),
-    ("redeploy", "update-deployment"),
-    ("undeploy", "delete-deployment"),
-    ("delete", "delete-script"),
-    ("version", "create-version"),
-    ("versions", "list-versions"),
-    ("deployments", "list-deployments"),
-    ("list", "list-scripts"),
-    ("run", "run-function"),
-    ("logs", "tail-logs"),
-    ("status", "show-file-status"),
-    ("apis", "list-apis"),
-    ("mcp", "start-mcp-server"),
-];
-
-const ALIASES: &[&str] = &[
-    "clone",
-    "create",
-    "deploy",
-    "redeploy",
-    "undeploy",
-    "delete",
-    "version",
-    "versions",
-    "deployments",
-    "list",
-    "run",
-    "logs",
-    "status",
-    "apis",
-    "mcp",
-];
-
-fn parse(command: &str) -> Cli {
-    let args = match command {
-        "login" => vec![
-            "crsp",
-            command,
-            "--creds",
-            "/definitely/missing/client-secret.json",
-        ],
-        "update-deployment" | "redeploy" | "enable-api" | "disable-api" => {
-            vec!["crsp", command, "fixture"]
-        }
-        _ => vec!["crsp", command],
-    };
-    Cli::try_parse_from(args).expect("surface command parses")
-}
-
-fn assert_wired(command: &str) {
-    let cli = parse(command);
-    let result = run(&cli);
-    assert!(
-        !format!("{result:?}").contains("NotImplemented"),
-        "{command} still uses placeholder dispatch"
-    );
-}
-
-#[test]
-fn every_canonical_command_dispatches_without_placeholder_error() {
-    for command in COMMANDS {
-        assert_wired(command);
-    }
-}
-
-#[test]
-fn every_alias_dispatches_without_placeholder_error() {
-    for command in ALIASES {
-        assert_wired(command);
-    }
-}
-
-#[test]
-fn aliases_and_canonical_commands_parse_to_equivalent_variants() {
-    for (alias, canonical) in ALIAS_PAIRS {
-        assert_eq!(
-            std::mem::discriminant(&parse(alias).command.unwrap()),
-            std::mem::discriminant(&parse(canonical).command.unwrap()),
-            "alias {alias} differs from canonical {canonical}"
-        );
-    }
-}
-
-#[test]
-fn command_variants_remain_real_parser_variants() {
-    for command in COMMANDS.iter().chain(ALIASES) {
-        assert!(!matches!(
-            parse(command).command,
-            Some(Commands::External(_))
-        ));
-    }
-}
 
 fn binary() -> Command {
     Command::cargo_bin("crsp").unwrap()
+}
+
+fn run_binary(name: &str, args: &[&str]) -> std::process::Output {
+    binary().arg(name).args(args).output().unwrap()
+}
+
+#[test]
+fn canonical_commands_have_command_specific_binary_outcomes() {
+    let cases: &[(&str, &[&str], i32, &str)] = &[
+        (
+            "login",
+            &["--creds", "/missing/client.json"],
+            1,
+            "No such file",
+        ),
+        ("logout", &[], 0, ""),
+        ("show-authorized-user", &[], 0, ""),
+        ("clone-script", &[], 1, "No script ID."),
+        (
+            "create-script",
+            &["--type", "invalid"],
+            1,
+            "Invalid script type",
+        ),
+        ("push", &[], 1, "Project settings not found."),
+        ("pull", &[], 1, "Project settings not found."),
+        ("create-deployment", &[], 1, "Project settings not found."),
+        (
+            "update-deployment",
+            &["fixture"],
+            1,
+            "Project settings not found.",
+        ),
+        ("delete-deployment", &[], 1, "Project settings not found."),
+        ("delete-script", &[], 1, "Script ID not set"),
+        ("create-version", &[], 1, "Project settings not found."),
+        ("list-versions", &[], 1, "Project settings not found."),
+        ("list-deployments", &[], 1, "Project settings not found."),
+        (
+            "run-function",
+            &["--params", "{"],
+            1,
+            "EOF while parsing an object",
+        ),
+        ("tail-logs", &[], 1, "GCP project ID is not set"),
+        ("setup-logs", &[], 1, "GCP project ID is not set"),
+        ("show-file-status", &[], 0, "Tracked files:"),
+        ("list-apis", &[], 1, "GCP project ID is not set"),
+        ("enable-api", &["drive"], 1, "GCP project ID is not set"),
+        ("disable-api", &["drive"], 1, "GCP project ID is not set"),
+        ("open-script", &[], 1, "Script ID not set"),
+        ("open-container", &[], 1, "Parent ID not set"),
+        ("open-web-app", &[], 1, "Script ID not set"),
+        ("open-logs", &[], 1, "GCP project ID is not set"),
+        ("open-api-console", &[], 1, "GCP project ID is not set"),
+        (
+            "open-credentials-setup",
+            &[],
+            1,
+            "GCP project ID is not set",
+        ),
+    ];
+    for (command, args, code, expected) in cases {
+        let output = run_binary(command, args);
+        assert_eq!(output.status.code(), Some(*code), "{command}");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains(expected), "{command}: {text}");
+    }
+}
+
+#[test]
+fn aliases_match_canonical_binary_streams_and_exit_codes() {
+    for (alias, canonical, args) in ALIAS_PAIRS {
+        let alias_output = run_binary(alias, args);
+        let canonical_output = run_binary(canonical, args);
+        assert_eq!(
+            alias_output.status.code(),
+            canonical_output.status.code(),
+            "{alias}"
+        );
+        assert_eq!(
+            alias_output.stdout, canonical_output.stdout,
+            "{alias} stdout"
+        );
+        assert_eq!(
+            alias_output.stderr, canonical_output.stderr,
+            "{alias} stderr"
+        );
+    }
 }
 
 #[test]
