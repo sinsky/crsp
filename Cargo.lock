@@ -295,44 +295,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crsp"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "base64 0.22.1",
- "clap",
- "demand",
- "futures",
- "globset",
- "home",
- "indexmap",
- "json5",
- "libc",
- "notify",
- "open",
- "predicates",
- "rand 0.9.5",
- "regex",
- "reqwest",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "unicode-width",
- "url",
- "walkdir",
- "wiremock",
-]
-
-[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -677,6 +639,44 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
+]
+
+[[package]]
+name = "google-clasp-rs"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "base64 0.22.1",
+ "clap",
+ "demand",
+ "futures",
+ "globset",
+ "home",
+ "indexmap",
+ "json5",
+ "libc",
+ "notify",
+ "open",
+ "predicates",
+ "rand 0.9.5",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width",
+ "url",
+ "walkdir",
+ "wiremock",
 ]
 
 [[package]]

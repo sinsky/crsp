@@ -1,8 +1,23 @@
 [package]
-name = "crsp"
+name = "google-clasp-rs"
 version = "0.1.0"
 edition = "2024"
-description = "crsp - The Apps Script CLI"
+description = "crsp - The Apps Script CLI (Rust port of google/clasp)"
+license = "Apache-2.0"
+repository = "https://github.com/sinsky/crsp"
+homepage = "https://github.com/sinsky/crsp"
+readme = "README.md"
+documentation = "https://docs.rs/google-clasp-rs"
+keywords = ["google-apps-script", "apps-script", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "crsp"
+path = "src/main.rs"
+
+[lib]
+name = "google_clasp_rs"
+path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "~4.5", features = ["derive", "env"] }

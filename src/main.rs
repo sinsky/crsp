@@ -5,7 +5,7 @@
 
 use clap::Parser as _;
 use clap::error::ErrorKind;
-use crsp::{Cli, run};
+use google_clasp_rs::{Cli, run};
 
 fn main() {
     let cli = match Cli::try_parse() {
