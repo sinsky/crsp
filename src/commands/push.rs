@@ -12,6 +12,11 @@ use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
 
+/// `push --watch` debounce (clasp `watchLocalFiles`, spec §2.6).
+pub const WATCH_DEBOUNCE_MS: u64 = 500;
+/// Banner printed at the start of the `push --watch` loop (clasp push.ts:141).
+pub const MESSAGE_WAITING_FOR_CHANGES: &str = "Waiting for changes...";
+
 pub async fn watch_files<'a, F>(
     root: &Path,
     debounce: Duration,
@@ -113,7 +118,7 @@ pub async fn push<A: PromptAdapter>(
     if !watch {
         return Ok(result);
     }
-    output.message("Waiting for changes...");
+    output.message(MESSAGE_WAITING_FOR_CHANGES);
     let client_ref = client;
     let config_ref = config;
     let ui_ref = ui;
@@ -123,7 +128,7 @@ pub async fn push<A: PromptAdapter>(
     let project_root = config.project_root_dir.clone();
     watch_files_filtered(
         &config.content_dir,
-        Duration::from_millis(500),
+        Duration::from_millis(WATCH_DEBOUNCE_MS),
         move |path| is_tracked_event_path(&project_root, &ignore, path),
         move |paths| {
             let relevant = paths.iter().any(|path| {

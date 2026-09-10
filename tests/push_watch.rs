@@ -5,6 +5,17 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 #[test]
+fn push_watch_pins_the_clasp_debounce_timer_and_banner() {
+    // clamp the spec §2.6 values: 500ms debounce and the `Waiting for
+    // changes...` banner (clasp push.ts:141) so drift fails the suite.
+    assert_eq!(crsp::commands::push::WATCH_DEBOUNCE_MS, 500);
+    assert_eq!(
+        crsp::commands::push::MESSAGE_WAITING_FOR_CHANGES,
+        "Waiting for changes..."
+    );
+}
+
+#[test]
 fn watcher_ignore_matching_uses_project_root_for_src_dir() {
     let directory = tempdir().unwrap();
     let content = directory.path().join("src");
