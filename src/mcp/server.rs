@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
 use home::home_dir;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
@@ -92,9 +91,12 @@ struct ScriptOutput {
     name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct McpServer {
-    base_urls: BaseUrls,
+    /// The tool API client: the user's credentials (clasp preAction
+    /// `initAuth`) or an unauthenticated client whose API calls fail locally
+    /// with clasp's auth error (the ApiClient no-credentials guard).
+    client: ApiClient,
 }
 
 impl Default for McpServer {
@@ -105,27 +107,48 @@ impl Default for McpServer {
 
 impl McpServer {
     pub fn new() -> Self {
+        let refresh: crate::api::RefreshFn = Arc::new(|| {
+            Box::pin(async { Err(CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string())) })
+        });
         Self {
-            base_urls: BaseUrls::from_env(),
+            client: ApiClient::with_base_urls(
+                ApiClientConfig::new(String::new(), refresh),
+                BaseUrls::from_env(),
+            )
+            .expect("mcp api client"),
         }
     }
 
     pub fn new_for_tests() -> Self {
+        Self::with_base_urls_and_token(BaseUrls::default(), "")
+    }
+
+    /// Test constructor: explicit base URLs and bearer token (the production
+    /// path loads credentials from `$HOME`, exercised by the golden cases).
+    pub fn with_base_urls_and_token(base_urls: BaseUrls, access_token: &str) -> Self {
+        let refresh: crate::api::RefreshFn = Arc::new(|| {
+            Box::pin(async { Err(CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string())) })
+        });
         Self {
-            base_urls: BaseUrls::default(),
+            client: ApiClient::with_base_urls(
+                ApiClientConfig::new(access_token.to_string(), refresh),
+                base_urls,
+            )
+            .expect("mcp api client"),
         }
     }
 
-    pub fn with_base_urls(base_urls: BaseUrls) -> Self {
-        Self { base_urls }
+    /// clasp `start-mcp.ts`: the MCP server reuses the preAction-initialized
+    /// clasp instance, so its tool API calls carry the user's OAuth2 client
+    /// (bearer token + 401 refresh), exactly like the CLI commands.
+    pub fn with_context(context: &crate::core::clasp::Clasp) -> Self {
+        Self {
+            client: context.client.clone(),
+        }
     }
 
-    fn client(&self) -> Result<ApiClient, CrspError> {
-        let refresh: crate::api::RefreshFn = Arc::new(|| {
-            Box::pin(async { Err(CrspError::Auth("Authentication is required.".to_string())) })
-                as BoxFuture<'static, Result<String, CrspError>>
-        });
-        ApiClient::with_base_urls(ApiClientConfig::new("", refresh), self.base_urls.clone())
+    fn client(&self) -> ApiClient {
+        self.client.clone()
     }
 
     fn validate_project(&self, project_dir: &str) -> Result<PathBuf, String> {
@@ -204,10 +227,7 @@ impl McpServer {
             Some(id) => id,
             None => return error_result("Error pushing project", "Project settings not found."),
         };
-        let client = match self.client() {
-            Ok(client) => client,
-            Err(error) => return error_result("Error pushing project", error),
-        };
+        let client = self.client();
         match push_files(&client, &config).await {
             Ok(result) => success_with_files(
                 format!(
@@ -246,10 +266,7 @@ impl McpServer {
             Some(id) => id,
             None => return error_result("Error pulling project", "Project settings not found."),
         };
-        let client = match self.client() {
-            Ok(client) => client,
-            Err(error) => return error_result("Error pulling project", error),
-        };
+        let client = self.client();
         match fetch_remote_files(&client, &script_id, &config, &project_dir, None).await {
             Ok(remote) => {
                 let inputs = remote
@@ -313,10 +330,7 @@ impl McpServer {
         if let Some(source_dir) = source_dir {
             config.content_dir = source_dir;
         }
-        let client = match self.client() {
-            Ok(client) => client,
-            Err(error) => return error_result("Error creating project", error),
-        };
+        let client = self.client();
         let name = args.project_name.unwrap_or_else(|| {
             project_dir
                 .file_name()
@@ -387,10 +401,7 @@ impl McpServer {
             config.content_dir = source_dir;
         }
         config.script_id = Some(script_id.clone());
-        let client = match self.client() {
-            Ok(client) => client,
-            Err(error) => return error_result("Error cloning project", error),
-        };
+        let client = self.client();
         match pull_initial_files(&client, &script_id, &config, &project_dir, None).await {
             Ok(pulled) => {
                 if let Err(error) = config.update_settings().await {
@@ -418,10 +429,7 @@ impl McpServer {
         output_schema = rmcp::handler::server::tool::schema_for_type::<ScriptsOutput>()
     )]
     async fn list_projects(&self, Parameters(_args): Parameters<EmptyArgs>) -> CallToolResult {
-        let client = match self.client() {
-            Ok(client) => client,
-            Err(error) => return error_result("Error listing projects", error),
-        };
+        let client = self.client();
         let scripts = match list_scripts(&client).await {
             Ok(scripts) => scripts.results,
             Err(error) => return error_result("Error listing projects", error),
@@ -459,7 +467,12 @@ impl ServerHandler for McpServer {
 }
 
 pub async fn start_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let service = McpServer::new().serve(stdio()).await?;
+    // clasp start-mcp.ts: the MCP server shares the preAction-initialized
+    // auth context (user credentials from `$HOME`), so tool API calls carry
+    // the user's bearer token and 401-refresh exactly like the CLI commands.
+    let context =
+        crate::core::clasp::Clasp::init_context(None, None, None, "default", false, false).await?;
+    let service = McpServer::with_context(&context).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

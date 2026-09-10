@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
-use wiremock::matchers::{body_json, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// A `mock-transcript.toml` entry (one wiremock mock).
@@ -36,6 +36,9 @@ pub struct TranscriptEntry {
     pub path: String,
     #[serde(default)]
     pub query: BTreeMap<String, String>,
+    /// Exact request-header matchers (e.g. the bearer authorization header).
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub body: Option<String>,
     pub status: u16,
@@ -98,9 +101,15 @@ pub struct Expected {
     #[serde(default)]
     pub files: BTreeMap<String, String>,
     /// Optional exact full request sequence (method + path + exact body when
-    /// given). Omitted → the sequence is not asserted.
+    /// given). When present, an empty array asserts ZERO requests; when
+    /// absent the sequence is not asserted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests: Option<Vec<ExpectedRequest>>,
+    /// Compare the request list as a multiset instead of an ordered
+    /// sequence (clasp fires some requests concurrently — e.g. list-apis'
+    /// `Promise.all` — so their relative order is nondeterministic).
     #[serde(default)]
-    pub requests: Vec<ExpectedRequest>,
+    pub requests_unordered: bool,
     /// MCP protocol case: `[{"send": "...", "expect": {...}}]` JSON-RPC
     /// request/response pairs over the binary's stdin/stdout. `send` and
     /// `expect` may embed the literal `<TMP>` (replaced with the copied
@@ -194,6 +203,9 @@ pub async fn register(server: &MockServer, transcript: &[TranscriptEntry]) {
         let mut mock = Mock::given(method(entry.method.as_str())).and(path(entry.path.as_str()));
         for (key, value) in &entry.query {
             mock = mock.and(query_param(key, value));
+        }
+        for (key, value) in &entry.headers {
+            mock = mock.and(header(key, value));
         }
         if let Some(body) = &entry.body {
             let body: Value = serde_json::from_str(body)
@@ -407,34 +419,73 @@ fn compare_files(actual: &RunResult, expected: &Expected, failures: &mut Vec<Str
 }
 
 fn compare_requests(actual: &RunResult, expected: &Expected, failures: &mut Vec<String>) {
-    if expected.requests.is_empty() {
+    let Some(expected_requests) = &expected.requests else {
+        return;
+    };
+    let mut actual_requests = actual.requests.clone();
+    if expected.requests_unordered {
+        let sort_key = |request: &ExpectedRequest| {
+            (
+                request.method.clone(),
+                request.path.clone(),
+                request
+                    .body
+                    .as_ref()
+                    .map(|body| serde_json::to_string(body).unwrap_or_default())
+                    .unwrap_or_default(),
+            )
+        };
+        actual_requests.sort_by_key(sort_key);
+        let mut expected_sorted = expected_requests.clone();
+        expected_sorted.sort_by_key(sort_key);
+        if actual_requests.len() != expected_sorted.len() {
+            failures.push(format!(
+                "request count diverged: expected {}, actual {}",
+                expected_sorted.len(),
+                actual_requests.len()
+            ));
+            return;
+        }
+        for (index, (actual, expected)) in actual_requests.iter().zip(&expected_sorted).enumerate()
+        {
+            compare_request_entry(actual, expected, index, failures);
+        }
         return;
     }
-    if actual.requests.len() != expected.requests.len() {
+    if actual_requests.len() != expected_requests.len() {
         failures.push(format!(
             "request count diverged: expected {}, actual {}",
-            expected.requests.len(),
-            actual.requests.len()
+            expected_requests.len(),
+            actual_requests.len()
         ));
         return;
     }
-    for (index, (actual, expected)) in actual.requests.iter().zip(&expected.requests).enumerate() {
-        if actual.method != expected.method || actual.path != expected.path {
-            failures.push(format!(
-                "request[{index}] diverged: expected {} {}, actual {} {}",
-                expected.method, expected.path, actual.method, actual.path
-            ));
-        }
-        if let Some(expected_body) = &expected.body
-            && actual.body.as_ref() != Some(expected_body)
-        {
-            failures.push(format!(
-                "request[{index}] {} {} body diverged:\n  expected: {expected_body}\n  actual:   {}",
-                actual.method,
-                actual.path,
-                actual.body.as_ref().unwrap_or(&Value::Null)
-            ));
-        }
+    for (index, (actual, expected)) in actual_requests.iter().zip(expected_requests).enumerate() {
+        compare_request_entry(actual, expected, index, failures);
+    }
+}
+
+fn compare_request_entry(
+    actual: &ExpectedRequest,
+    expected: &ExpectedRequest,
+    index: usize,
+    failures: &mut Vec<String>,
+) {
+    if actual.method != expected.method || actual.path != expected.path {
+        failures.push(format!(
+            "request[{index}] diverged: expected {} {}, actual {} {}",
+            expected.method, expected.path, actual.method, actual.path
+        ));
+    }
+    if let Some(expected_body) = &expected.body
+        && actual.body.as_ref() != Some(expected_body)
+    {
+        failures.push(format!(
+            "request[{index}] {} {} body diverged:\n  expected: {expected_body}\n  actual:   {}",
+            actual.method,
+            actual.path,
+            actual.body.as_ref().unwrap_or(&Value::Null)
+        ));
     }
 }
 

@@ -1,0 +1,14 @@
+{
+  "command": [
+    "push"
+  ],
+  "env": {},
+  "stdout": "",
+  "stderr": "No access, refresh token, API key or refresh handler callback is set.\n",
+  "exit": 1,
+  "files": {
+    "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n",
+    "project/src/Code.js": "// hello\n"
+  },
+  "requests": []
+}

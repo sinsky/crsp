@@ -155,7 +155,8 @@ fn parse_body<T: DeserializeOwned>(text: &str) -> Result<T, CrspError> {
 }
 
 /// The authenticated Google API client (spec §2.2). Typed service accessors
-/// (`script()`, `drive()`, …) build on [`ApiClient::request`].
+/// (`script()`, `drive()`, …) build on [`ApiClient::request`]. Clone shares
+/// the token/refresh state (used by the MCP server's CLI-context reuse).
 pub struct ApiClient {
     pub(crate) http: reqwest::Client,
     base_urls: BaseUrls,
@@ -165,6 +166,23 @@ pub struct ApiClient {
     max_retry_delay: Option<Duration>,
     total_timeout: Option<Duration>,
     clock: ClockFn,
+}
+
+impl Clone for ApiClient {
+    fn clone(&self) -> Self {
+        Self {
+            http: self.http.clone(),
+            base_urls: self.base_urls.clone(),
+            access_token: StdMutex::new(
+                self.access_token.lock().expect("access token lock").clone(),
+            ),
+            refresh: Arc::clone(&self.refresh),
+            sleeper: Arc::clone(&self.sleeper),
+            max_retry_delay: self.max_retry_delay,
+            total_timeout: self.total_timeout,
+            clock: Arc::clone(&self.clock),
+        }
+    }
 }
 
 impl ApiClient {
@@ -239,6 +257,19 @@ impl ApiClient {
     /// §7.1, §7.4), converting failures into [`CrspError`]. Success is any
     /// 2xx response; every other final outcome is an error.
     pub async fn request(&self, request: ApiRequest) -> Result<ApiResponse, CrspError> {
+        // clasp parity (google-auth-library 10.5.0
+        // `getRequestMetadataAsync`): with no credentials at all the auth
+        // layer throws before any request is sent; replicate that locally so
+        // an unauthenticated run fails fast instead of sending an empty
+        // bearer (spec §4.3 contract).
+        if self
+            .access_token
+            .lock()
+            .expect("access token lock")
+            .is_empty()
+        {
+            return Err(CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string()));
+        }
         let response = self.execute(&request).await?;
         if response.status().is_success() {
             Ok(ApiResponse(response))

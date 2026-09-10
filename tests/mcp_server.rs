@@ -203,7 +203,7 @@ async fn list_projects_returns_exact_text_and_structured_content() {
         drive: api.uri(),
         ..BaseUrls::default()
     };
-    let server_impl = McpServer::with_base_urls(urls);
+    let server_impl = McpServer::with_base_urls_and_token(urls, "ACCESS-PLACEHOLDER");
     let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
     let (server_read, server_write) = tokio::io::split(server_io);
@@ -260,7 +260,7 @@ async fn connected_with_urls(
     let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
     let (server_read, server_write) = tokio::io::split(server_io);
-    let server = McpServer::with_base_urls(urls);
+    let server = McpServer::with_base_urls_and_token(urls, "ACCESS-PLACEHOLDER");
     let server_task = tokio::spawn(async move {
         server
             .serve(AsyncRwTransport::<RoleServer, _, _>::new_server(
@@ -275,6 +275,37 @@ async fn connected_with_urls(
             AsyncRwTransport::<RoleClient, _, _>::new_client(client_read, client_write),
             rmcp::service::ClientLifecycleMode::Initialize,
         )
+        .await
+        .expect("client initializes");
+    let server = server_task.await.expect("server task completes");
+    (client, server)
+}
+
+async fn connected_with_urls_and_token(
+    urls: BaseUrls,
+    access_token: &str,
+) -> (
+    rmcp::service::RunningService<RoleClient, TestClient>,
+    rmcp::service::RunningService<RoleServer, McpServer>,
+) {
+    let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let server = McpServer::with_base_urls_and_token(urls, access_token);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(AsyncRwTransport::<RoleServer, _, _>::new_server(
+                server_read,
+                server_write,
+            ))
+            .await
+            .expect("server initializes")
+    });
+    let client = TestClient
+        .serve(AsyncRwTransport::<RoleClient, _, _>::new_client(
+            client_read,
+            client_write,
+        ))
         .await
         .expect("client initializes");
     let server = server_task.await.expect("server task completes");
@@ -617,4 +648,70 @@ fn tool_annotations_are_expressible_by_rmcp() {
         .idempotent(false)
         .read_only(true);
     assert_eq!(annotations.read_only_hint, Some(true));
+}
+
+#[tokio::test]
+async fn tools_fail_locally_without_credentials_like_clasp() {
+    // clasp's MCP server reuses the preAction-initialized OAuth2 client;
+    // google-auth-library throws `No access, refresh token, API key or
+    // refresh handler callback is set.` before any HTTP request, and the
+    // tool surfaces the error. crsp must match (zero requests).
+    let api = WireMockServer::start().await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    let (client, server) = connected_with_urls_and_token(all_test_urls(&api.uri()), "").await;
+    let result = call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(result.is_error, Some(true));
+    // clasp's catch prefixes the tool error (`mcp/server.ts:237-249`); crsp
+    // uses the §5 #3 corrected prefix `Error pulling project` followed by the
+    // google-auth-library message verbatim.
+    assert_eq!(
+        text(&result, 0),
+        "Error pulling project: No access, refresh token, API key or refresh handler callback is set."
+    );
+    assert_eq!(api.received_requests().await.unwrap_or_default().len(), 0);
+    server.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn tools_send_the_user_credentials_bearer_header() {
+    // clasp's MCP server authorizes tool API calls with the user's OAuth2
+    // client credentials (preAction initAuth), not an empty bearer.
+    use wiremock::matchers::header;
+    let api = WireMockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .and(header("authorization", "Bearer ACCESS-PLACEHOLDER"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "old"}]}),
+        ))
+        .mount(&api)
+        .await;
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    std::fs::write(project.path().join("Code.js"), "old").unwrap();
+    let (client, server) =
+        connected_with_urls_and_token(all_test_urls(&api.uri()), "ACCESS-PLACEHOLDER").await;
+    let result = call_complete(&client, "pull_files", json!({"projectDir": project.path()})).await;
+    assert_eq!(result.is_error, Some(false), "text: {}", text(&result, 0));
+    assert_eq!(
+        text(&result, 0),
+        format!(
+            "Pulled project in {} to local filesystem successfully.",
+            project.path().display()
+        )
+    );
+    server.cancel().await.unwrap();
 }

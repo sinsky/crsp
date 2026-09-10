@@ -3,3 +3,4 @@ method = "GET"
 path = "/v1/projects/script/content"
 status = 200
 body_json = '{"files":[{"name":"appsscript","type":"JSON","source":"{\"timeZone\":\"America/New_York\"}"},{"name":"Code","type":"SERVER_JS","source":"// hello\n"}]}'
+headers = { authorization = "Bearer ACCESS-PLACEHOLDER" }

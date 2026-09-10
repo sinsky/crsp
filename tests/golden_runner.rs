@@ -217,6 +217,7 @@ async fn run_case(case: &Case) -> Result<(), String> {
             env: BTreeMap::new(),
             files: case.expected.files.clone(),
             requests: case.expected.requests.clone(),
+            requests_unordered: case.expected.requests_unordered,
             mcp_steps: Vec::new(),
         },
     );
@@ -325,9 +326,35 @@ async fn run_mcp(
         .spawn()
         .expect("spawn mcp server");
     let mut stdin = child.stdin.take().expect("mcp stdin");
-    let mut reader = std::io::BufReader::new(child.stdout.take().expect("mcp stdout"));
+    let stdout = child.stdout.take().expect("mcp stdout");
     let mut stderr = String::new();
     let mut stderr_reader = std::io::BufReader::new(child.stderr.take().expect("mcp stderr"));
+
+    // Bounded reads (T9 pattern): a worker thread feeds response lines into a
+    // channel; every step waits at most 5s so a stalled server fails the case
+    // instead of hanging the suite.
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<std::io::Result<String>>();
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    let _ = line_tx.send(Err(std::io::Error::other("mcp stdout closed (EOF)")));
+                    break;
+                }
+                Ok(_) => {
+                    if line_tx.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = line_tx.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
 
     let mut failures = Vec::new();
     let project_text = project_dir.to_string_lossy().to_string();
@@ -337,18 +364,17 @@ async fn run_mcp(
             failures.push(format!("mcp write failed: {error}"));
             break;
         }
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                failures.push("mcp stdout closed (EOF)".to_string());
-                break;
-            }
-            Ok(_) => {}
-            Err(error) => {
+        let line = match line_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => {
                 failures.push(format!("mcp read failed: {error}"));
-                break;
+                break 'steps;
             }
-        }
+            Err(_) => {
+                failures.push("mcp read timed out after 5s".to_string());
+                break 'steps;
+            }
+        };
         let actual_raw: serde_json::Value =
             serde_json::from_str(line.trim_end()).unwrap_or_else(|error| {
                 panic!(
@@ -389,6 +415,47 @@ async fn run_mcp(
     let status = child.wait().expect("wait for mcp server");
     if !status.success() {
         failures.push(format!("mcp server exited {status}: {stderr}"));
+    }
+    // The expected files/request data of MCP cases is asserted like every
+    // other case (the MCP project lives inside $HOME, so the home walk skips
+    // the project subtree).
+    let files = snapshot_tree(project_dir, "project/", None)
+        .into_iter()
+        .chain(snapshot_tree(
+            home,
+            "home/",
+            Some(
+                project_dir
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_default(),
+            ),
+        ))
+        .collect();
+    let state = compare(
+        &golden::RunResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit: 0,
+            files,
+            requests: observations(server).await,
+        },
+        &golden::Expected {
+            command: Vec::new(),
+            variants: Vec::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+            exit: 0,
+            cwd: None,
+            env: BTreeMap::new(),
+            files: case.expected.files.clone(),
+            requests: case.expected.requests.clone(),
+            requests_unordered: case.expected.requests_unordered,
+            mcp_steps: Vec::new(),
+        },
+    );
+    if !state.is_empty() {
+        failures.push(state);
     }
     if failures.is_empty() {
         Ok(())

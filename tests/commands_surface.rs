@@ -262,3 +262,41 @@ async fn show_authorized_user_human_output_matches_clasp_and_honors_base_url_ove
         1
     );
 }
+
+#[tokio::test]
+async fn api_commands_fail_locally_without_credentials_like_clasp() {
+    // clasp v3.4.1: google-auth-library `getRequestMetadataAsync` throws
+    // before any HTTP request when the OAuth2 client has no credentials;
+    // index.ts prints `error.message` on stderr with exit 1. crsp must match
+    // (zero requests reach the API).
+    use tempfile::TempDir;
+    let directory = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let src = directory.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        directory.path().join(".clasp.json"),
+        serde_json::json!({"scriptId": "script", "rootDir": "src"}).to_string(),
+    )
+    .unwrap();
+
+    let server = MockServer::start().await;
+    let output = Command::cargo_bin("crsp")
+        .unwrap()
+        .arg("push")
+        .current_dir(directory.path())
+        .env("HOME", home.path())
+        .env("CRSP_API_BASE_URL", server.uri())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "No access, refresh token, API key or refresh handler callback is set.\n"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        0,
+        "the auth guard must fire before any request"
+    );
+}

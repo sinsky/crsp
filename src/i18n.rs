@@ -140,6 +140,13 @@ pub const DELETED_CREDENTIALS: &str = "Deleted credentials.";
 /// Not logged in (clasp `commands/show-authorized-user.ts:51-55`).
 pub const NOT_LOGGED_IN: &str = "Not logged in.";
 
+/// google-auth-library 10.5.0 `OAuth2Client.getRequestMetadataAsync` (clasp
+/// package-lock): thrown before any HTTP request when the client has no
+/// credentials. clasp's `index.ts` prints `error.message` on stderr with
+/// exit 1 — crsp's Api-level guard reproduces it verbatim.
+pub const NO_CREDENTIALS: &str =
+    "No access, refresh token, API key or refresh handler callback is set.";
+
 /// Logged-in message (clasp `commands/show-authorized-user.ts:59-68`).
 pub fn logged_in_as(email: &str) -> String {
     format!("You are logged in as {email}.")

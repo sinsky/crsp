@@ -8,3 +8,4 @@ method = "PUT"
 path = "/v1/projects/script/content"
 status = 200
 body_json = '''{"files":[]}'''
+headers = { authorization = "Bearer ACCESS-PLACEHOLDER" }

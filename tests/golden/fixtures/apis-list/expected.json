@@ -10,7 +10,24 @@
     "project/src/Code.js": "// hello\n",
     "project/src/appsscript.json": "{\n  \"timeZone\": \"America/New_York\",\n  \"exceptionLogging\": \"STACKDRIVER\"\n}\n"
   },
-  "requests": [],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/v1/projects/gcp-project/services"
+    },
+    {
+      "method": "GET",
+      "path": "/discovery/v1/apis"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/gcp-project/services"
+    },
+    {
+      "method": "GET",
+      "path": "/discovery/v1/apis"
+    }
+  ],
   "variants": [
     {
       "command": [
@@ -29,5 +46,6 @@
       "stderr": "",
       "exit": 0
     }
-  ]
+  ],
+  "requests_unordered": true
 }
