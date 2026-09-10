@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crsp::api::BaseUrls;
 use crsp::mcp::server::{McpServer, validate_project_dir};
@@ -638,6 +639,119 @@ fn validates_project_and_source_jails() {
     );
     assert!(crsp::mcp::server::validate_source_dir(&cwd, "../escape").is_err());
     assert!(crsp::mcp::server::validate_source_dir(&cwd, "src").is_ok());
+}
+
+#[tokio::test]
+async fn tool_calls_reject_project_dirs_outside_the_jail() {
+    // Spec §9.4 MCP jail: the tool-level rejection surfaces the exact jail
+    // error verbatim as a tool error, before any API call and without any
+    // filesystem access.
+    let (client, server) = connected().await;
+    let result = call_complete(
+        &client,
+        "push_files",
+        json!({"projectDir": "/etc/crsp-jail-test"}),
+    )
+    .await;
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(
+        text(&result, 0),
+        "Security Error: projectDir must be within the user home directory or current working directory. Resolved path \"/etc/crsp-jail-test\" is not permitted."
+    );
+    server.cancel().await.unwrap();
+}
+
+async fn connected_with_urls_and_refresh(
+    urls: BaseUrls,
+    access_token: &str,
+    refresh: crsp::api::RefreshFn,
+) -> (
+    rmcp::service::RunningService<RoleClient, TestClient>,
+    rmcp::service::RunningService<RoleServer, McpServer>,
+) {
+    let (client_io, server_io) = tokio::io::duplex(1024 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let server = McpServer::with_base_urls_and_refresh(urls, access_token, refresh);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(AsyncRwTransport::<RoleServer, _, _>::new_server(
+                server_read,
+                server_write,
+            ))
+            .await
+            .expect("server initializes")
+    });
+    let client = TestClient
+        .serve_with_lifecycle(
+            AsyncRwTransport::<RoleClient, _, _>::new_client(client_read, client_write),
+            rmcp::service::ClientLifecycleMode::Initialize,
+        )
+        .await
+        .expect("client initializes");
+    let server = server_task.await.expect("server task completes");
+    (client, server)
+}
+
+#[tokio::test]
+async fn tool_calls_reissue_the_token_refresh_after_expiry_divergence() {
+    // Known difference (parked audit item 14, accepted): clasp's MCP server
+    // reuses ONE OAuth2Client, whose cached token refreshes once and is
+    // shared by every tool call. crsp clones the client per tool call from
+    // the server's token snapshot, so each call starts from the stale
+    // snapshot and re-issues the refresh after an expiry. Pinned here: two
+    // calls after one expiry produce TWO refreshes (and both succeed).
+    let api = WireMockServer::start().await;
+    use wiremock::matchers::header;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .and(header("authorization", "Bearer OLD"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"error":{"message":"expired"}})),
+        )
+        .mount(&api)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script-1/content"))
+        .and(header("authorization", "Bearer NEW"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"files": [{"name": "Code", "type": "SERVER_JS", "source": "fresh"}]}),
+        ))
+        .mount(&api)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/v1/projects/script-1/content"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&api)
+        .await;
+    let refresh_count = Arc::new(std::sync::Mutex::new(0usize));
+    let counter = Arc::clone(&refresh_count);
+    let refresh: crsp::api::RefreshFn = Arc::new(move || {
+        *counter.lock().unwrap() += 1;
+        Box::pin(async { Ok("NEW".to_string()) })
+    });
+    let project = tempfile::Builder::new()
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    std::fs::write(
+        project.path().join(".clasp.json"),
+        r#"{"scriptId":"script-1"}"#,
+    )
+    .unwrap();
+    std::fs::write(project.path().join("Code.js"), "new").unwrap();
+    let (client, server) =
+        connected_with_urls_and_refresh(all_test_urls(&api.uri()), "OLD", refresh).await;
+    for _ in 0..2 {
+        let result =
+            call_complete(&client, "push_files", json!({"projectDir": project.path()})).await;
+        assert_eq!(result.is_error, Some(false), "text: {}", text(&result, 0));
+    }
+    assert_eq!(
+        *refresh_count.lock().unwrap(),
+        2,
+        "each tool call re-issues the refresh from the stale snapshot"
+    );
+    server.cancel().await.unwrap();
 }
 
 #[test]

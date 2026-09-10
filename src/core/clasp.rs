@@ -47,10 +47,28 @@ impl Clasp {
         config.allow_symlinks = allow_symlinks || config.allow_symlinks;
         let store = CredentialStore::new(auth_path(auth)?, allow_symlinks);
         let mut credentials = load_credentials(&store, user, adc).await?;
-        if let Some(current) = credentials.as_ref()
-            && current.access_token.is_none()
-        {
-            credentials = None;
+        // google-auth-library parity (clasp `getAuthorizedOAuth2Client`): a
+        // saved entry with a missing/empty access token is not "logged out"
+        // when a refresh token exists — the client refreshes on first use.
+        // Only an entry with nothing to refresh with is discarded.
+        let access_token_absent = credentials
+            .as_ref()
+            .is_some_and(|current| current.access_token.as_deref().is_none_or(str::is_empty));
+        if access_token_absent {
+            match credentials
+                .as_ref()
+                .and_then(|current| current.refresh_token.clone())
+            {
+                Some(_) => {
+                    let current = credentials.as_ref().expect("credentials loaded");
+                    let client = env_oauth_client();
+                    credentials = Some(
+                        refresh_and_save(&client, current, &store, user, &reqwest::Client::new())
+                            .await?,
+                    );
+                }
+                None => credentials = None,
+            }
         }
         if let Some(current) = credentials.as_ref()
             && current

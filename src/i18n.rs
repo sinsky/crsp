@@ -216,9 +216,15 @@ pub const INVALID_SCRIPT_ID: &str = "Invalid script ID.";
 pub const CLONE_WHICH_SCRIPT: &str = "Clone which script?";
 
 /// `Security Warning: Skipping write of {file} ({reason}).` (clasp
-/// clone-script.ts:107).
+/// clone-script.ts:107, pull.ts:80).
 pub fn security_warning_skipping_write(file: &str, reason: &str) -> String {
     format!("Security Warning: Skipping write of {file} ({reason}).")
+}
+
+/// `Security Warning: Skipping symbolic link {file}. Symbolic links are not
+/// supported.` (clasp pull.ts:57; collect-time symlink skips only).
+pub fn security_warning_skipping_symbolic_link(file: &str) -> String {
+    format!("Security Warning: Skipping symbolic link {file}. Symbolic links are not supported.")
 }
 
 /// `Unexpected error, script ID missing from response.` (clasp

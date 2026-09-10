@@ -1410,3 +1410,124 @@ async fn load_credentials_reads_the_store_without_adc() {
     assert!(missing.is_none());
     drop(guard);
 }
+
+// ---------------------------------------------------------------------------
+// Refresh-token-only .clasprc.json at init (parked audit item 15, clasp
+// parity fix): google-auth-library refreshes on first use instead of
+// treating the entry as logged out.
+// ---------------------------------------------------------------------------
+
+static OAUTH2_BASE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Holds the `CRSP_OAUTH2_BASE_URL` lock for the guard's lifetime, unsetting
+/// the variable on drop (the refresh path reads it per process).
+#[allow(dead_code)]
+struct Oauth2BaseEnvGuard(std::sync::MutexGuard<'static, ()>);
+
+impl Drop for Oauth2BaseEnvGuard {
+    fn drop(&mut self) {
+        unsafe { std::env::remove_var("CRSP_OAUTH2_BASE_URL") };
+    }
+}
+
+fn oauth2_base_env_guard(url: &str) -> Oauth2BaseEnvGuard {
+    let guard = OAUTH2_BASE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    unsafe { std::env::set_var("CRSP_OAUTH2_BASE_URL", url) };
+    Oauth2BaseEnvGuard(guard)
+}
+
+#[tokio::test]
+async fn refresh_token_only_entry_refreshes_at_init_like_clasp() {
+    let server = wiremock::MockServer::start().await;
+    token_mock(
+        &server,
+        200,
+        serde_json::json!({"access_token": "ACCESS-REFRESHED-AT-INIT", "expires_in": 3600}),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let store_path = dir.path().join(".clasprc.json");
+    std::fs::write(
+        &store_path,
+        r#"{"tokens": {"default": {"type": "authorized_user", "refresh_token": "REFRESH-LOGIN"}}}"#,
+    )
+    .unwrap();
+    let _env = oauth2_base_env_guard(&server.uri());
+    let context = crsp::core::clasp::Clasp::init_context(
+        None,
+        None,
+        Some(&store_path),
+        "default",
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    let credentials = context.credentials.as_ref().expect("refreshed credentials");
+    assert_eq!(
+        credentials.access_token.as_deref(),
+        Some("ACCESS-REFRESHED-AT-INIT")
+    );
+    // The refreshed entry is persisted with the refresh token kept.
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_path).unwrap()).unwrap();
+    assert_eq!(
+        saved["tokens"]["default"]["access_token"],
+        "ACCESS-REFRESHED-AT-INIT"
+    );
+    assert_eq!(saved["tokens"]["default"]["refresh_token"], "REFRESH-LOGIN");
+    assert!(
+        saved["tokens"]["default"]["expiry_date"].as_i64().unwrap()
+            > std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+    );
+    // The grant used the default clasp client (clasp's default OAuth client
+    // supplies id/secret when the store has none).
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1, "exactly one refresh POST");
+    let pairs = form_pairs(&requests[0]);
+    assert_form_contains(&pairs, "grant_type", "refresh_token");
+    assert_form_contains(&pairs, "refresh_token", "REFRESH-LOGIN");
+    assert_form_contains(
+        &pairs,
+        "client_id",
+        crsp::constants::DEFAULT_OAUTH_CLIENT_ID,
+    );
+    assert_form_contains(
+        &pairs,
+        "client_secret",
+        crsp::constants::DEFAULT_OAUTH_CLIENT_SECRET,
+    );
+}
+
+#[tokio::test]
+async fn entry_without_any_token_stays_logged_out_at_init() {
+    // The discard path is preserved: an entry with neither token is still
+    // treated as logged out (clasp's client then fails at request time with
+    // the no-credentials error).
+    let dir = tempfile::tempdir().unwrap();
+    let store_path = dir.path().join(".clasprc.json");
+    std::fs::write(
+        &store_path,
+        r#"{"tokens": {"default": {"type": "authorized_user"}}}"#,
+    )
+    .unwrap();
+    let context = crsp::core::clasp::Clasp::init_context(
+        None,
+        None,
+        Some(&store_path),
+        "default",
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        context.credentials.is_none(),
+        "a tokenless entry must stay discarded"
+    );
+}

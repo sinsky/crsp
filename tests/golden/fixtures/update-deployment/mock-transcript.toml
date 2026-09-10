@@ -2,4 +2,5 @@
 method = "PUT"
 path = "/v1/projects/script/deployments/dep1"
 status = 200
+times = 2
 body_json = '''{"deploymentId":"dep1","deploymentConfig":{"description":"upd","versionNumber":5}}'''

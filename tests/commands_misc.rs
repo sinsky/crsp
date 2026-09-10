@@ -356,7 +356,7 @@ async fn run_function_params_syntax_error_fails() {
     let config = configured_config(temp.path());
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
-    let result = run_function(
+    let error = run_function(
         &client,
         &config,
         RunFunctionArgs {
@@ -367,8 +367,17 @@ async fn run_function_params_syntax_error_fails() {
         &Ui::new(TestPrompt::default()),
         &mut output,
     )
-    .await;
-    assert!(result.is_err(), "JSON syntax error must fail (exit 1)");
+    .await
+    .unwrap_err();
+    // Pinned divergence (parked audit item 8): clasp surfaces V8's
+    // `SyntaxError: Unexpected token 'b', "{bad" is not valid JSON.`; crsp
+    // forwards serde_json's message verbatim. Accepted wrapper divergence.
+    match error {
+        CrspError::Validation(message) => {
+            assert_eq!(message, "key must be a string at line 1 column 2")
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
     assert!(received(&server).await.is_empty(), "no request is sent");
 }
 
@@ -2257,5 +2266,307 @@ async fn open_hints_userinfo_failure_sets_empty_auth_user() {
     assert_eq!(
         stdout_of(&out),
         "Open https://script.google.com/d/script/edit?authUser= in your browser to continue.\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Degenerate-input divergences from clasp (parked audit item 10) and pinned
+// wrapper/parse divergences. Each test pins crsp's CURRENT behavior and
+// documents what clasp does instead; these are accepted divergences, not
+// bugs to fix.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tail_logs_empty_text_payload_prints_a_blank_payload_line_divergence() {
+    // Degenerate-input divergence (accepted): clasp's
+    // `if (entry.textPayload)` treats an empty string as falsy and falls
+    // through to the jsonPayload branch — with no jsonPayload the entry is
+    // skipped entirely. crsp's `text_payload()` yields Some("") and prints
+    // the padded-blank payload column instead of dropping the line.
+    let server = MockServer::start().await;
+    mount_logs_desc(
+        &server,
+        json!([text_entry(
+            "i1",
+            "INFO",
+            "2026-01-01T00:00:00Z",
+            "",
+            Some("greet")
+        )]),
+    )
+    .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    tail_logs(
+        &client,
+        &mut config,
+        TailLogsArgs::default(),
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let tz = local_utc_offset();
+    let stdout = stdout_of(&out);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![format!(
+            "{} {} {} {}",
+            pad("INFO", 20),
+            format_local_time("2026-01-01T00:00:00Z", tz).unwrap(),
+            pad("greet", 15),
+            pad("", 20)
+        )]
+    );
+}
+
+#[tokio::test]
+async fn tail_logs_null_resource_prints_the_entry_divergence() {
+    // Degenerate-input divergence (accepted): clasp's
+    // `if (!entry.resource || !entry.timestamp) return` drops entries whose
+    // resource is explicitly null (falsy). crsp checks presence only, so the
+    // entry prints with an N/A function column.
+    let server = MockServer::start().await;
+    mount_logs_desc(
+        &server,
+        json!([{
+            "insertId": "i1",
+            "severity": "INFO",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "resource": null,
+            "textPayload": "hello"
+        }]),
+    )
+    .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    tail_logs(
+        &client,
+        &mut config,
+        TailLogsArgs::default(),
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let tz = local_utc_offset();
+    let stdout = stdout_of(&out);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![format!(
+            "{} {} {} {}",
+            pad("INFO", 20),
+            format_local_time("2026-01-01T00:00:00Z", tz).unwrap(),
+            pad("N/A", 15),
+            pad("hello", 20)
+        )]
+    );
+}
+
+#[tokio::test]
+async fn tail_logs_non_string_json_message_compact_stringifies_divergence() {
+    // Degenerate-input divergence (accepted): a truthy NON-string
+    // `jsonPayload.message` (e.g. 123) is printed verbatim by clasp
+    // (`padEnd(entry.jsonPayload?.message, 20)`), while crsp's String
+    // pattern misses it and compact-stringifies the whole payload.
+    let server = MockServer::start().await;
+    mount_logs_desc(
+        &server,
+        json!([{
+            "insertId": "i1",
+            "severity": "INFO",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "resource": {"labels": {"function_name": "greet"}},
+            "jsonPayload": {"message": 123}
+        }]),
+    )
+    .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    tail_logs(
+        &client,
+        &mut config,
+        TailLogsArgs::default(),
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let tz = local_utc_offset();
+    let stdout = stdout_of(&out);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![format!(
+            "{} {} {} {}",
+            pad("INFO", 20),
+            format_local_time("2026-01-01T00:00:00Z", tz).unwrap(),
+            pad("greet", 15),
+            pad("{\"message\":123}", 20)
+        )]
+    );
+}
+
+#[tokio::test]
+async fn open_web_app_pre_existing_auth_user_param_is_appended_divergence() {
+    // Degenerate-input divergence (accepted): when the API-provided web app
+    // URL already carries an authUser parameter, clasp's
+    // `url.searchParams.set('authUser', ...)` REPLACES it, while crsp's
+    // append_pair adds a second authUser pair.
+    let server = MockServer::start().await;
+    mount_userinfo(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/deployments/dep-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "entryPoints": [{"entryPointType": "WEB_APP", "webApp": {"url": "https://script.google.com/macros/s/XYZ/exec?authUser=OLD"}}]
+        })))
+        .mount(&server)
+        .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let config = gcp_config(temp.path(), "proj");
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    let opener = RecordingOpener::default();
+    crsp::commands::open_web_app::open_web_app(
+        &client,
+        &config,
+        crsp::commands::open_web_app::OpenWebAppArgs {
+            deployment_id: Some("dep-1"),
+        },
+        true,
+        &Ui::new(TestPrompt::default()),
+        &opener,
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp set() would render `?authUser=1234567890`; crsp keeps both pairs.
+    assert_eq!(
+        stdout_of(&out),
+        "Open https://script.google.com/macros/s/XYZ/exec?authUser=OLD&authUser=1234567890 in your browser to continue.\n"
+    );
+}
+
+#[tokio::test]
+async fn enable_api_null_enabled_advanced_services_fails_divergence() {
+    // Degenerate-input divergence (accepted): clasp replaces a null
+    // `enabledAdvancedServices` with a one-entry array and proceeds to
+    // enable the service; crsp treats the explicit null as a non-array and
+    // fails before any request.
+    let server = MockServer::start().await;
+    mount_enable(&server, "proj", "sheets", 200).await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    write_manifest(temp.path(), json!({"enabledAdvancedServices": null})).await;
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut output = Output::new(false, Vec::new(), Vec::new());
+    let error = enable_api(
+        &client,
+        &mut config,
+        "sheets",
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap_err();
+    match error {
+        CrspError::Config(message) => assert_eq!(
+            message,
+            "Manifest dependencies.enabledAdvancedServices is not an array."
+        ),
+        other => panic!("expected Config error, got {other:?}"),
+    }
+    assert!(
+        received(&server).await.is_empty(),
+        "no Service Usage request is sent"
+    );
+}
+
+#[tokio::test]
+async fn disable_api_null_enabled_advanced_services_fails_divergence() {
+    // Degenerate-input divergence (accepted): clasp skips the manifest write
+    // for a null `enabledAdvancedServices` (falsy) and still disables the
+    // service at GCP; crsp fails before any request.
+    let server = MockServer::start().await;
+    mount_disable(&server, "proj", "sheets", 200).await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    write_manifest(temp.path(), json!({"enabledAdvancedServices": null})).await;
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut output = Output::new(false, Vec::new(), Vec::new());
+    let error = disable_api(
+        &client,
+        &mut config,
+        "sheets",
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap_err();
+    match error {
+        CrspError::Config(message) => assert_eq!(
+            message,
+            "Manifest dependencies.enabledAdvancedServices is not an array."
+        ),
+        other => panic!("expected Config error, got {other:?}"),
+    }
+    assert!(
+        received(&server).await.is_empty(),
+        "no Service Usage request is sent"
+    );
+}
+
+#[tokio::test]
+async fn enable_api_top_level_array_manifest_fails_divergence() {
+    // Degenerate-input divergence (accepted): clasp assigns `dependencies`
+    // onto the array object and JSON.stringify drops it, so the manifest is
+    // unchanged and the service is still enabled (silent no-op); crsp fails
+    // with a Config error before any request.
+    let server = MockServer::start().await;
+    mount_enable(&server, "proj", "sheets", 200).await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("appsscript.json"), "[1, 2]").unwrap();
+    let mut config = gcp_config(temp.path(), "proj");
+    let mut output = Output::new(false, Vec::new(), Vec::new());
+    let error = enable_api(
+        &client,
+        &mut config,
+        "sheets",
+        &Ui::new(TestPrompt::default()),
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap_err();
+    match error {
+        CrspError::Config(message) => assert_eq!(message, "Manifest is not an object."),
+        other => panic!("expected Config error, got {other:?}"),
+    }
+    assert!(
+        received(&server).await.is_empty(),
+        "no Service Usage request is sent"
+    );
+    // The array manifest is left untouched.
+    assert_eq!(
+        fs::read_to_string(temp.path().join("appsscript.json")).unwrap(),
+        "[1, 2]"
     );
 }

@@ -183,8 +183,18 @@ async fn src_dir_outside_project_root_is_rejected() {
         CrspError::Config(message) => message,
         other => panic!("expected Config error, got {other:?}"),
     };
-    assert!(message.starts_with("Security Error: srcDir"), "{message}");
-    assert!(message.contains("escapes project root"), "{message}");
+    // Byte-exact clasp text (clasp.ts:215-220; parked audit item 12).
+    let resolved = root.parent().unwrap().join("outside");
+    assert_eq!(
+        message,
+        format!(
+            "Security Error: srcDir \"../outside\" escapes project root.\n  \
+             Resolved: {}\n  Project root: {}\n\
+             This may indicate a malicious .clasp.json file attempting path traversal.",
+            resolved.display(),
+            root.display()
+        )
+    );
     drop(dir);
 }
 

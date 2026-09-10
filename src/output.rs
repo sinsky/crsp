@@ -66,6 +66,8 @@ impl<W: Write, E: Write> Output<W, E> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+
     use serde_json::json;
 
     use super::Output;
@@ -109,5 +111,36 @@ mod tests {
         let mut out = Vec::new();
         assert!(!Output::new(false, &mut out, Vec::new()).is_json());
         assert!(Output::new(true, &mut out, Vec::new()).is_json());
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("pipe closed"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn message_and_warn_swallow_write_errors_like_console() {
+        // Pinned divergence (parked audit item 7): clasp's `console.log`/
+        // `console.warn` swallow write errors, so `message`/`warn` ignore
+        // io failures, while `print_json` keeps clasp's throwing
+        // `process.stdout.write` contract via `io::Result`.
+        let mut output = Output::new(false, FailingWriter, FailingWriter);
+        output.message("ignored");
+        output.warn("ignored");
+    }
+
+    #[test]
+    fn print_json_propagates_write_errors() {
+        let mut output = Output::new(true, FailingWriter, Vec::new());
+        let error = output
+            .print_json(&json!({ "success": true }))
+            .expect_err("write failure must propagate");
+        assert_eq!(error.to_string(), "pipe closed");
     }
 }

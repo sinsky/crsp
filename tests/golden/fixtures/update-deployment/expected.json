@@ -1,19 +1,38 @@
 {
-  "command": [
-    "update-deployment",
-    "dep1",
-    "-V",
-    "5"
+  "variants": [
+    {
+      "command": ["update-deployment", "dep1", "-V", "5"],
+      "stdout": "Redeployed dep1 @5\n",
+      "stderr": "",
+      "exit": 0
+    },
+    {
+      "command": ["update-deployment", "dep1", "-V", "5", "--json"],
+      "stdout": "{\n  \"deploymentId\": \"dep1\",\n  \"versionNumber\": 5,\n  \"description\": \"upd\"\n}\n",
+      "stderr": "",
+      "exit": 0
+    }
   ],
   "env": {},
-  "stdout": "Redeployed dep1 @5\n",
-  "stderr": "",
+  "stdout": "",
   "exit": 0,
   "files": {
     "home/.clasprc.json": "{\n  \"tokens\": {\n    \"default\": {\n      \"client_id\": \"1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com\",\n      \"client_secret\": \"v6V3fKV_zWU7iw1DrpO1rknX\",\n      \"type\": \"authorized_user\",\n      \"access_token\": \"ACCESS-PLACEHOLDER\",\n      \"refresh_token\": \"REFRESH-PLACEHOLDER\",\n      \"expiry_date\": 99999999999999\n    }\n  }\n}",
     "project/.clasp.json": "{\n  \"scriptId\": \"script\",\n  \"rootDir\": \"src\"\n}\n"
   },
   "requests": [
+    {
+      "method": "PUT",
+      "path": "/v1/projects/script/deployments/dep1",
+      "body": {
+        "deploymentConfig": {
+          "description": "",
+          "versionNumber": 5,
+          "scriptId": "script",
+          "manifestFileName": "appsscript"
+        }
+      }
+    },
     {
       "method": "PUT",
       "path": "/v1/projects/script/deployments/dep1",

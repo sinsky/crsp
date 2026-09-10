@@ -291,4 +291,18 @@ mod tests {
             "{ 'weird key': 'x' }"
         );
     }
+
+    #[test]
+    fn inspect_stays_single_line_for_long_arrays_pinned_divergence() {
+        // Pinned divergence (parked audit item 11): Node's util.inspect wraps
+        // long arrays at breakLength (~80 columns); crsp keeps the
+        // single-line rendering regardless of length.
+        let long: Vec<serde_json::Value> = (0..40)
+            .map(|index| json!(format!("element-{index:02}")))
+            .collect();
+        let inspected = js_inspect(&json!(long));
+        assert!(!inspected.contains('\n'), "must stay single-line");
+        assert!(inspected.starts_with("[ 'element-00',"));
+        assert!(inspected.ends_with("'element-39' ]"));
+    }
 }

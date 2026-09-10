@@ -1078,3 +1078,135 @@ async fn pull_json_lists_cwd_relative_pulled_files() {
         "{\n  \"pulledFiles\": [\n    \"src/Code.js\"\n  ],\n  \"deletedFiles\": []\n}\n"
     );
 }
+
+// ---------------------------------------------------------------------------
+// pull skip warnings (clasp pull.ts:49-91; spec §9.4 stderr wording)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pull_warns_on_collect_time_symlinks_like_clasp() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(temp.path().join("outside.js"), "outside").unwrap();
+    symlink(temp.path().join("outside.js"), src.join("link.js")).unwrap();
+    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
+        file: PullFile::new("Code", "SERVER_JS", "// hello\n"),
+        local_path: "src/Code.js".to_string(),
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp pull.ts:57 — the collect-time symlink skip warns on stderr with
+    // the cwd-relative path; the pull itself still succeeds.
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "Security Warning: Skipping symbolic link src/link.js. Symbolic links are not supported.\n"
+    );
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "└─ src/Code.js\nPulled one file.\n"
+    );
+    assert!(src.join("Code.js").exists());
+
+    // JSON mode never warns (clasp `if (!options.json && ...)`).
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(true, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(String::from_utf8(err).unwrap(), "");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pull_warns_on_write_skips_like_clasp() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, src.join("nested")).unwrap();
+    let remote: Vec<crsp::core::project::RemoteFile> = vec![crsp::core::project::RemoteFile {
+        file: PullFile::new("nested/Code", "SERVER_JS", "bad"),
+        local_path: "src/nested/Code.js".to_string(),
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    pull_command(
+        &src_config(temp.path()),
+        temp.path(),
+        &remote,
+        false,
+        false,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    // clasp pull.ts:80-90 — every write skip warns with the clasp reason
+    // text; nothing is written outside the jail.
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "Security Warning: Skipping write of src/nested/Code.js (parent directory contains a symbolic link).\n"
+    );
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "└─ src/nested/Code.js\nPulled one file.\n"
+    );
+    assert!(!outside.join("Code.js").exists());
+}
+
+#[test]
+fn skip_reason_stderr_wording_matches_clasp() {
+    // clasp pull.ts:81-90 / clone-script.ts:107-117 reason mapping (spec
+    // §9.4: every skip reason's stderr wording pinned).
+    use crsp::commands::shared::write_skip_reason_text;
+    use crsp::core::files::SkipReason;
+    assert_eq!(
+        write_skip_reason_text(SkipReason::ParentSymlink),
+        "parent directory contains a symbolic link"
+    );
+    assert_eq!(
+        write_skip_reason_text(SkipReason::TargetSymlink),
+        "target path is a symbolic link"
+    );
+    for reason in [
+        SkipReason::Symlink,
+        SkipReason::UnsupportedType,
+        SkipReason::OutsideContentDir,
+        SkipReason::RaceCondition,
+        SkipReason::SymlinkLoop,
+    ] {
+        assert_eq!(
+            write_skip_reason_text(reason),
+            "outside project directory or unsafe race condition detected"
+        );
+    }
+}

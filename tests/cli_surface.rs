@@ -184,12 +184,38 @@ fn unknown_command_reports_clasp_style_message_and_exits_one() {
 
 #[test]
 fn unknown_option_exits_one() {
+    // Pinned wrapper divergence (parked audit item 1): commander prints
+    // `error: unknown option '--bogus'` with no usage; clap prints
+    // `unexpected argument ... found` + usage. Both exit 1 (spec §6.1).
     crsp_bin()
         .arg("--bogus")
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("--bogus"));
+        .stderr(predicates::str::contains(
+            "unexpected argument '--bogus' found",
+        ));
+}
+
+#[test]
+fn help_with_unknown_subcommand_pins_the_current_divergence() {
+    // Pinned wrapper divergence (parked audit item 3): clasp (commander 13)
+    // dispatches `help <unknown>` as `<unknown> --help`, which falls back to
+    // the parent `help({error: true})` — the TOP-LEVEL help goes to stdout
+    // with exit 1 and empty stderr. crsp uses clap's built-in help
+    // subcommand, which reports `unrecognized subcommand` on stderr.
+    let assertion = crsp_bin()
+        .args(["help", "frobnicate"])
+        .assert()
+        .failure()
+        .code(1);
+    let output = assertion.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unrecognized subcommand 'frobnicate'"),
+        "stderr: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
 }
 
 #[test]
@@ -222,6 +248,24 @@ fn redirect_port_must_be_within_zero_to_65535() {
         .stderr(predicates::str::contains(
             "'99999' should be >= 0 and <= 65535.",
         ));
+}
+
+#[test]
+fn redirect_port_rejects_hex_and_scientific_notation() {
+    // Pinned divergence (parked audit item 4): clasp feeds the value through
+    // JS `Number()`, so `0x10` → 16 and `1e3` → 1000 are accepted; crsp keeps
+    // strict base-10 integer parsing and rejects both. Padded decimals
+    // ("007") parse identically in both.
+    for value in ["0x10", "1e3"] {
+        crsp_bin()
+            .args(["login", "--redirect-port", value])
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicates::str::contains(format!(
+                "'{value}' is not a valid integer."
+            )));
+    }
 }
 
 #[test]
@@ -362,6 +406,13 @@ fn user_option_defaults_to_default_user() {
 
 #[test]
 fn env_vars_are_applied_for_global_options() {
+    // The clasp_config_* variables are process-global; the mutex keeps the
+    // set→parse→remove window isolated from concurrent parse()-based tests
+    // (parked audit item 6).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     unsafe {
         std::env::set_var("clasp_config_auth", "/env/auth.json");
         std::env::set_var("clasp_config_ignore", "/env/ignore");

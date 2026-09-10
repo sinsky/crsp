@@ -129,6 +129,16 @@ impl McpServer {
         let refresh: crate::api::RefreshFn = Arc::new(|| {
             Box::pin(async { Err(CrspError::Auth(crate::i18n::NO_CREDENTIALS.to_string())) })
         });
+        Self::with_base_urls_and_refresh(base_urls, access_token, refresh)
+    }
+
+    /// Test plumbing: like [`Self::with_base_urls_and_token`] with a custom
+    /// refresh closure (used to pin the per-call token refresh re-issue).
+    pub fn with_base_urls_and_refresh(
+        base_urls: BaseUrls,
+        access_token: &str,
+        refresh: crate::api::RefreshFn,
+    ) -> Self {
         Self {
             client: ApiClient::with_base_urls(
                 ApiClientConfig::new(access_token.to_string(), refresh),

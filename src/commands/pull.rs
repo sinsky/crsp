@@ -2,7 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::core::config::ProjectConfig;
-use crate::core::files::{LocalExtensions, PullResult, pull_files};
+use crate::core::files::{
+    LocalExtensions, PullResult, SkipReason, collect_local_files, pull_files,
+};
 use crate::core::project::RemoteFile;
 use crate::error::CrspError;
 use crate::output::Output;
@@ -25,6 +27,23 @@ pub async fn pull<A: PromptAdapter>(
     let extensions = LocalExtensions::from_config(config);
     let pull_inputs: Vec<crate::core::files::PullFile> =
         remote.iter().map(|entry| entry.file.clone()).collect();
+    // clasp pull.ts:45-66: locals are collected before the pull (the list
+    // also feeds the --deleteUnusedFiles comparison); collect-time symlink
+    // skips warn on stderr in human mode only.
+    let collected = collect_local_files(config).await?;
+    if !output.is_json() {
+        for item in &collected.skipped {
+            if item.reason == SkipReason::Symlink {
+                output.warn(&crate::i18n::security_warning_skipping_symbolic_link(
+                    &crate::commands::show_file_status::cwd_relative(
+                        cwd,
+                        &config.content_dir,
+                        &item.local_path,
+                    ),
+                ));
+            }
+        }
+    }
     let mut result = pull_files(
         &pull_inputs,
         &config.content_dir,
@@ -33,6 +52,21 @@ pub async fn pull<A: PromptAdapter>(
         &extensions,
     )
     .await?;
+    // clasp pull.ts:75-91: every write skip warns with the clasp reason text
+    // (human mode only).
+    if !output.is_json() {
+        for item in &result.skipped {
+            let display = remote
+                .iter()
+                .find(|entry| entry.file.remote_path == item.local_path)
+                .map(|entry| entry.local_path.clone())
+                .unwrap_or_else(|| item.local_path.clone());
+            output.warn(&crate::i18n::security_warning_skipping_write(
+                &display,
+                crate::commands::shared::write_skip_reason_text(item.reason),
+            ));
+        }
+    }
     if delete_unused && (force || ui.is_interactive()) {
         let confirmed = force
             || ui.confirm(PromptConfirm {
@@ -44,12 +78,11 @@ pub async fn pull<A: PromptAdapter>(
                 .iter()
                 .map(|file| extensions.local_name(file))
                 .collect();
-            let tracked = crate::core::files::collect_local_files(config).await?;
-            for file in tracked.files {
+            for file in &collected.files {
                 if !remote_names.contains(&file.local_path) {
                     let target = config.content_dir.join(&file.local_path);
                     if delete_bound(&config.content_dir, &target, config.allow_symlinks)? {
-                        result.deleted.push(file.local_path);
+                        result.deleted.push(file.local_path.clone());
                     }
                 }
             }
