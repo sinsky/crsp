@@ -566,11 +566,13 @@ pub async fn prepare_push(
     client: &ApiClient,
     config: &ProjectConfig,
 ) -> Result<PushResult, CrspError> {
-    let collected = collect_local_files(config).await?;
+    // The script-id assert runs before the local tree walk so unconfigured
+    // runs fail fast instead of scanning the whole content dir first.
     let script_id = config
         .script_id
         .as_deref()
         .ok_or_else(|| CrspError::Config(i18n::PROJECT_SETTINGS_NOT_FOUND.to_string()))?;
+    let collected = collect_local_files(config).await?;
     let remote = client.script().get_content(script_id, None).await?;
     let remote = remote
         .files()

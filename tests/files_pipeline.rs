@@ -193,17 +193,41 @@ async fn syntax_error_api_response_is_extracted_with_snippet() {
     let src = temp.path().join("src");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("Code.js"), "one\ntwo\nthree").unwrap();
-    let result = crsp::core::files::push_files(&api_client(&server.uri()), &config(temp.path()))
-        .await
-        .unwrap_err();
+    let result =
+        google_clasp_rs::core::files::push_files(&api_client(&server.uri()), &config(temp.path()))
+            .await
+            .unwrap_err();
     let message = result.to_string();
     let files = collect_local_files(&config(temp.path()))
         .await
         .unwrap()
         .files;
-    let snippet = crsp::core::files::syntax_error_snippet(&message, &files).unwrap();
+    let snippet = google_clasp_rs::core::files::syntax_error_snippet(&message, &files).unwrap();
     assert!(snippet.contains("Missing ;"));
     assert!(snippet.contains("=> two"));
+}
+
+#[tokio::test]
+async fn prepare_push_rejects_missing_script_id_before_local_collection() {
+    // The script-id assert must run before the local tree walk: collecting
+    // first makes unconfigured runs (e.g. `crsp push` with no `.clasp.json`)
+    // scan the whole content dir — including huge build outputs — before
+    // failing. Observable: a broken ignore file must NOT surface when the
+    // script id is missing.
+    let server = MockServer::start().await;
+    let temp = TempDir::new().unwrap();
+    let mut unconfigured = config(temp.path());
+    unconfigured.script_id = None;
+    unconfigured.ignore_file_path = Some(temp.path().join("missing.claspignore"));
+    let error =
+        google_clasp_rs::core::files::prepare_push(&api_client(&server.uri()), &unconfigured)
+            .await
+            .unwrap_err();
+    assert_eq!(error.to_string(), "Project settings not found.");
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no request must be sent"
+    );
 }
 
 #[cfg(unix)]
