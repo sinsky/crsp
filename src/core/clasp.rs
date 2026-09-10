@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::api::{ApiClient, ApiClientConfig, RefreshFn};
 use crate::auth::oauth_client::{AuthEndpoints, OAuthClient};
@@ -24,7 +24,19 @@ impl Clasp {
         adc: bool,
         allow_symlinks: bool,
     ) -> Result<Arc<Self>, CrspError> {
+        Self::init_context(project, ignore, auth, user, adc, allow_symlinks).await
+    }
+
+    pub async fn init_context(
+        project: Option<&Path>,
+        ignore: Option<&Path>,
+        auth: Option<&Path>,
+        user: &str,
+        adc: bool,
+        allow_symlinks: bool,
+    ) -> Result<Arc<Self>, CrspError> {
         let cwd = std::env::current_dir()?;
+        let project = project.filter(|path| path.exists());
         let mut config = ProjectConfig::discover(project, &cwd).await?;
         if let Some(ignore) = ignore {
             config.ignore_file_path = Some(resolve_file_or_dir(
@@ -60,11 +72,13 @@ impl Clasp {
             .unwrap_or_default();
         let refresh_store = store.clone();
         let refresh_user = user.to_string();
-        let refresh_credentials = credentials.clone();
+        let refresh_credentials = Arc::new(Mutex::new(credentials.clone()));
+        let refresh_credentials_for_closure = Arc::clone(&refresh_credentials);
         let refresh: RefreshFn = std::sync::Arc::new(move || {
             let store = refresh_store.clone();
             let user = refresh_user.clone();
-            let credentials = refresh_credentials.clone();
+            let credentials_state = Arc::clone(&refresh_credentials_for_closure);
+            let credentials = credentials_state.lock().unwrap().clone();
             Box::pin(async move {
                 let credentials = credentials
                     .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))?;
@@ -77,9 +91,12 @@ impl Clasp {
                     &reqwest::Client::new(),
                 )
                 .await?;
-                refreshed
+                let access_token = refreshed
                     .access_token
-                    .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))
+                    .clone()
+                    .ok_or_else(|| CrspError::Auth("Authentication is required.".to_string()))?;
+                *credentials_state.lock().unwrap() = Some(refreshed);
+                Ok(access_token)
             })
         });
         let client = ApiClient::new(ApiClientConfig::new(token, refresh))?;

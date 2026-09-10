@@ -1,5 +1,9 @@
-use std::path::Path;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::time::Duration;
+
+use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
@@ -7,6 +11,62 @@ use crate::core::files::{PushResult, prepare_push, put_push_files};
 use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
+
+pub async fn watch_files<'a, F>(
+    root: &Path,
+    debounce: Duration,
+    mut callback: F,
+) -> Result<(), CrspError>
+where
+    F: FnMut(Vec<PathBuf>) -> Pin<Box<dyn Future<Output = Result<bool, CrspError>> + 'a>> + 'a,
+{
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |result| {
+        let _ = sender.send(result);
+    })
+    .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))?;
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => return Ok(()),
+            event = receiver.recv() => {
+                let Some(event) = event else { return Ok(()); };
+                let mut paths = event_paths(event)?;
+                let deadline = tokio::time::sleep(debounce);
+                tokio::pin!(deadline);
+                loop {
+                    tokio::select! {
+                        _ = &mut deadline => break,
+                        next = receiver.recv() => {
+                            match next {
+                                Some(next) => paths.extend(event_paths(next)?),
+                                None => return Ok(()),
+                            }
+                        }
+                    }
+                }
+                paths.sort();
+                paths.dedup();
+                if !callback(paths).await? { return Ok(()); }
+            }
+        }
+    }
+}
+
+fn event_paths(event: notify::Result<notify::Event>) -> Result<Vec<PathBuf>, CrspError> {
+    let event = event.map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))?;
+    if matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    ) {
+        Ok(event.paths)
+    } else {
+        Ok(Vec::new())
+    }
+}
 
 pub async fn push<A: PromptAdapter>(
     client: &ApiClient,
@@ -16,43 +76,97 @@ pub async fn push<A: PromptAdapter>(
     ui: &Ui<A>,
     output: &mut Output<impl std::io::Write, impl std::io::Write>,
 ) -> Result<PushResult, CrspError> {
-    loop {
-        let result = prepare_push(client, config).await?;
-        if !force
-            && result
-                .changed
-                .iter()
-                .any(|file| file.local_path == "appsscript.json")
-        {
-            let confirmed = ui.confirm(PromptConfirm {
-                prompt: "Manifest file has been updated. Do you want to push and overwrite?"
-                    .to_string(),
-                default: false,
-            })?;
-            if !confirmed {
-                output.message("Skipping push.");
-                return Ok(result);
-            }
-            force = true;
-        }
-        put_push_files(client, config, &result).await?;
-        if result.up_to_date {
-            output.message("Script is already up to date.");
-        } else if output.is_json() {
-            output.print_json(
-                &result
-                    .files
-                    .iter()
-                    .map(|file| file.local_path.clone())
-                    .collect::<Vec<_>>(),
-            )?;
-        }
-        if !watch {
+    let result = prepare_push(client, config).await?;
+    if !force
+        && result
+            .changed
+            .iter()
+            .any(|file| file.local_path == "appsscript.json")
+    {
+        if !ui.confirm(PromptConfirm {
+            prompt: "Manifest file has been updated. Do you want to push and overwrite?"
+                .to_string(),
+            default: false,
+        })? {
+            output.message("Skipping push.");
             return Ok(result);
         }
-        output.message("Waiting for changes...");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        force = true;
     }
+    put_push_files(client, config, &result).await?;
+    print_result(&result, output)?;
+    if !watch {
+        return Ok(result);
+    }
+    output.message("Waiting for changes...");
+    let client_ref = client;
+    let config_ref = config;
+    let ui_ref = ui;
+    let output_ref = std::sync::Arc::new(std::sync::Mutex::new(output));
+    let force_state = std::sync::Arc::new(std::sync::Mutex::new(force));
+    watch_files(
+        &config.content_dir,
+        Duration::from_millis(500),
+        move |paths| {
+            let relevant = paths.iter().any(|path| {
+                path.file_name().and_then(|name| name.to_str()) == Some("appsscript.json")
+                    || path.extension().is_some_and(|extension| {
+                        extension == "js"
+                            || extension == "gs"
+                            || extension == "html"
+                            || extension == "json"
+                    })
+            });
+            let force_state = std::sync::Arc::clone(&force_state);
+            let output_ref = std::sync::Arc::clone(&output_ref);
+            Box::pin(async move {
+                if !relevant {
+                    return Ok(true);
+                }
+                let next = prepare_push(client_ref, config_ref).await?;
+                let needs_confirmation = !*force_state.lock().unwrap()
+                    && next
+                        .changed
+                        .iter()
+                        .any(|file| file.local_path == "appsscript.json");
+                if needs_confirmation {
+                    if !ui_ref.confirm(PromptConfirm {
+                        prompt:
+                            "Manifest file has been updated. Do you want to push and overwrite?"
+                                .to_string(),
+                        default: false,
+                    })? {
+                        output_ref.lock().unwrap().message("Skipping push.");
+                        return Ok(false);
+                    }
+                    *force_state.lock().unwrap() = true;
+                }
+                put_push_files(client_ref, config_ref, &next).await?;
+                print_result(&next, *output_ref.lock().unwrap())?;
+                Ok(true)
+            })
+        },
+    )
+    .await?;
+    Ok(result)
+}
+
+fn print_result(
+    result: &PushResult,
+    output: &mut Output<impl std::io::Write, impl std::io::Write>,
+) -> Result<(), CrspError> {
+    if result.up_to_date {
+        output.message("Script is already up to date.");
+    } else if output.is_json() {
+        output.print_json(
+            &result
+                .files
+                .iter()
+                .map(|file| file.local_path.clone())
+                .collect::<Vec<_>>(),
+        )?;
+    }
+    Ok(())
 }
 
 pub fn content_dir(config: &ProjectConfig) -> &Path {
