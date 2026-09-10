@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crsp::api::BaseUrls;
-use crsp::mcp::server::{McpServer, validate_project_dir};
+use google_clasp_rs::api::BaseUrls;
+use google_clasp_rs::mcp::server::{McpServer, validate_project_dir};
 use rmcp::model::{CallToolRequestParams, CallToolResponse, ToolAnnotations};
 use rmcp::service::{ClientServiceExt, ServiceExt};
 use rmcp::transport::async_rw::AsyncRwTransport;
@@ -637,8 +637,8 @@ fn validates_project_and_source_jails() {
         error.to_string(),
         "Security Error: projectDir must be within the user home directory or current working directory. Resolved path \"/etc/crsp\" is not permitted."
     );
-    assert!(crsp::mcp::server::validate_source_dir(&cwd, "../escape").is_err());
-    assert!(crsp::mcp::server::validate_source_dir(&cwd, "src").is_ok());
+    assert!(google_clasp_rs::mcp::server::validate_source_dir(&cwd, "../escape").is_err());
+    assert!(google_clasp_rs::mcp::server::validate_source_dir(&cwd, "src").is_ok());
 }
 
 #[tokio::test]
@@ -664,7 +664,7 @@ async fn tool_calls_reject_project_dirs_outside_the_jail() {
 async fn connected_with_urls_and_refresh(
     urls: BaseUrls,
     access_token: &str,
-    refresh: crsp::api::RefreshFn,
+    refresh: google_clasp_rs::api::RefreshFn,
 ) -> (
     rmcp::service::RunningService<RoleClient, TestClient>,
     rmcp::service::RunningService<RoleServer, McpServer>,
@@ -695,12 +695,10 @@ async fn connected_with_urls_and_refresh(
 
 #[tokio::test]
 async fn tool_calls_reissue_the_token_refresh_after_expiry_divergence() {
-    // Known difference (parked audit item 14, accepted): clasp's MCP server
-    // reuses ONE OAuth2Client, whose cached token refreshes once and is
-    // shared by every tool call. crsp clones the client per tool call from
-    // the server's token snapshot, so each call starts from the stale
-    // snapshot and re-issues the refresh after an expiry. Pinned here: two
-    // calls after one expiry produce TWO refreshes (and both succeed).
+    // The refreshed token is shared across tool calls: `ApiClient::clone`
+    // shares the token cell, so the second call reuses the NEW token from
+    // the first call's refresh and issues no second refresh. Pinned here:
+    // two calls after one expiry produce ONE refresh (and both succeed).
     let api = WireMockServer::start().await;
     use wiremock::matchers::header;
     Mock::given(method("GET"))
@@ -726,7 +724,7 @@ async fn tool_calls_reissue_the_token_refresh_after_expiry_divergence() {
         .await;
     let refresh_count = Arc::new(std::sync::Mutex::new(0usize));
     let counter = Arc::clone(&refresh_count);
-    let refresh: crsp::api::RefreshFn = Arc::new(move || {
+    let refresh: google_clasp_rs::api::RefreshFn = Arc::new(move || {
         *counter.lock().unwrap() += 1;
         Box::pin(async { Ok("NEW".to_string()) })
     });
@@ -748,8 +746,8 @@ async fn tool_calls_reissue_the_token_refresh_after_expiry_divergence() {
     }
     assert_eq!(
         *refresh_count.lock().unwrap(),
-        2,
-        "each tool call re-issues the refresh from the stale snapshot"
+        1,
+        "the second tool call reuses the refreshed token"
     );
     server.cancel().await.unwrap();
 }
