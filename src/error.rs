@@ -21,6 +21,4 @@ pub enum CrspError {
     Validation(String),
     #[error("Aborted.")]
     Aborted,
-    #[error("{0} is not implemented yet.")]
-    NotImplemented(String),
 }

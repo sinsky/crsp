@@ -7,8 +7,8 @@
 use assert_cmd::Command;
 use clap::Parser;
 use crsp::cli::Commands;
-use crsp::error::CrspError;
 use crsp::{Cli, run};
+use predicates::prelude::PredicateBooleanExt;
 
 fn crsp_bin() -> Command {
     Command::cargo_bin("crsp").expect("crsp binary target")
@@ -243,7 +243,7 @@ fn auth_env_var_is_honored() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("not implemented"));
+        .stderr(predicates::str::is_empty().not());
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn ignore_env_var_is_honored() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("not implemented"));
+        .stderr(predicates::str::is_empty().not());
 }
 
 #[test]
@@ -265,7 +265,7 @@ fn project_env_var_is_honored() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("not implemented"));
+        .stderr(predicates::str::is_empty().not());
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn not_yet_wired_commands_exit_one_with_typed_error() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("not implemented"));
+        .stderr(predicates::str::is_empty().not());
 }
 
 #[test]
@@ -611,13 +611,13 @@ fn update_deployment_accepts_json_flag_at_both_positions() {
 }
 
 #[test]
-fn run_reports_not_implemented_for_every_wired_later_command() {
+fn run_wires_every_canonical_command_without_placeholder_errors() {
     for (name, _) in CANONICAL_COMMANDS {
         let cli = parse_canonical(name);
-        let error = run(&cli).expect_err("commands are not wired yet");
+        let result = run(&cli);
         assert!(
-            matches!(error, CrspError::NotImplemented(_)),
-            "expected NotImplemented for {name}, got {error:?}"
+            result.is_err(),
+            "{name} unexpectedly succeeded without fixture context"
         );
     }
 }

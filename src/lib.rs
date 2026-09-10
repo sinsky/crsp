@@ -1,6 +1,3 @@
-//! crsp - The Apps Script CLI (Rust reimplementation of clasp, spec
-//! docs/superpowers/specs/2026-09-09-crsp-design.md).
-
 pub mod api;
 pub mod auth;
 pub mod cli;
@@ -14,16 +11,20 @@ pub mod output;
 pub mod text;
 pub mod ui;
 
-use clap::CommandFactory;
-
+use crate::auth::flow::{AuthOptions, validate_scope_options};
+use crate::auth::oauth_client::AuthEndpoints;
+use crate::auth::{CredentialStore, login, logout, show_authorized_user};
+use crate::cli::*;
+use crate::commands::shared::{SystemOpener, include_user_hint_in_url};
+use crate::core::clasp::Clasp;
 use crate::error::CrspError;
+use crate::output::Output;
+use crate::ui::{DemandAdapter, Ui};
+use clap::CommandFactory;
+use std::path::Path;
 
 pub use crate::cli::{Cli, Commands};
 
-/// Dispatches a parsed command line (spec §3.2 flow). Command handlers are
-/// wired by later tasks; every canonical command currently reports
-/// [`CrspError::NotImplemented`]. Unknown commands render clasp's diagnostic
-/// plus help on stdout, and a missing subcommand renders help on stderr.
 pub fn run(cli: &Cli) -> Result<(), CrspError> {
     match &cli.command {
         None => {
@@ -34,49 +35,433 @@ pub fn run(cli: &Cli) -> Result<(), CrspError> {
             let command = args.first().map(String::as_str).unwrap_or_default();
             let mut program = Cli::command();
             program.print_help().map_err(CrspError::Io)?;
-            Err(CrspError::Validation(i18n::unknown_command(command)))
+            Err(CrspError::Validation(crate::i18n::unknown_command(command)))
         }
-        Some(command) => dispatch_not_wired(command),
+        Some(Commands::StartMcpServer) => runtime()
+            .block_on(crate::mcp::start_server())
+            .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string()))),
+        Some(Commands::Login(args)) => runtime().block_on(run_login(cli, args)),
+        Some(Commands::Logout) => runtime().block_on(run_logout(cli)),
+        Some(Commands::ShowAuthorizedUser) => runtime().block_on(run_show_user(cli)),
+        Some(command) => runtime().block_on(run_command(cli, command)),
     }
 }
 
-fn dispatch_not_wired(command: &Commands) -> Result<(), CrspError> {
-    Err(CrspError::NotImplemented(
-        canonical_name(command).to_string(),
-    ))
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
 }
 
-fn canonical_name(command: &Commands) -> &'static str {
+async fn run_login(cli: &Cli, args: &LoginArgs) -> Result<(), CrspError> {
+    validate_scope_options(args.use_project_scopes, args.include_clasp_scopes)?;
+    let store = CredentialStore::new(
+        auth_path(cli.globals.auth.as_deref())?,
+        cli.globals.allow_symlinks,
+    );
+    let options = AuthOptions {
+        no_localhost: args.no_localhost,
+        creds_file: args.creds.clone().map(Into::into),
+        use_project_scopes: args.use_project_scopes,
+        include_clasp_scopes: args.include_clasp_scopes,
+        extra_scopes: args.extra_scopes.clone(),
+        redirect_port: args.redirect_port,
+        adc: cli.globals.adc,
+    };
+    let ui = Ui::new(DemandAdapter);
+    let mut output = Output::stdout(cli.globals.json);
+    let payload = login(
+        &options,
+        None,
+        &store,
+        &cli.globals.user,
+        &ui,
+        &mut output,
+        &reqwest::Client::new(),
+        &AuthEndpoints::default(),
+        true,
+    )
+    .await?;
+    if output.is_json() {
+        output.print_json(&payload)?;
+    }
+    Ok(())
+}
+
+async fn run_logout(cli: &Cli) -> Result<(), CrspError> {
+    let store = CredentialStore::new(
+        auth_path(cli.globals.auth.as_deref())?,
+        cli.globals.allow_symlinks,
+    );
+    let result = logout(&store, &cli.globals.user).await?;
+    let mut output = Output::stdout(cli.globals.json);
+    if output.is_json() {
+        output.print_json(&crate::auth::flow::logout_payload())?;
+    } else if result.deleted {
+        output.message("Deleted credentials.");
+    }
+    Ok(())
+}
+
+async fn run_show_user(cli: &Cli) -> Result<(), CrspError> {
+    let store = CredentialStore::new(
+        auth_path(cli.globals.auth.as_deref())?,
+        cli.globals.allow_symlinks,
+    );
+    let credentials =
+        crate::auth::load_credentials(&store, &cli.globals.user, cli.globals.adc).await?;
+    let payload = show_authorized_user(
+        credentials,
+        Some(&store),
+        &cli.globals.user,
+        &reqwest::Client::new(),
+        &AuthEndpoints::default(),
+    )
+    .await?;
+    let mut output = Output::stdout(cli.globals.json);
+    if output.is_json() {
+        output.print_json(&payload)?;
+    } else if payload.logged_in {
+        output.message(&format!(
+            "Logged in as {}.",
+            payload.email.unwrap_or_default()
+        ));
+    } else {
+        output.message("Not logged in.");
+    }
+    Ok(())
+}
+
+async fn run_command(cli: &Cli, command: &Commands) -> Result<(), CrspError> {
+    let context = Clasp::init(
+        cli.globals.project.as_deref().map(Path::new),
+        cli.globals.ignore.as_deref().map(Path::new),
+        cli.globals.auth.as_deref().map(Path::new),
+        &cli.globals.user,
+        cli.globals.adc,
+        cli.globals.allow_symlinks,
+    )
+    .await?;
+    let ui = Ui::new(DemandAdapter);
+    let opener = SystemOpener;
+    let mut output = Output::stdout(cli.globals.json);
+    let cwd = std::env::current_dir()?;
+    let mut config = context.config.clone();
     match command {
-        Commands::Login(_) => "login",
-        Commands::Logout => "logout",
-        Commands::ShowAuthorizedUser => "show-authorized-user",
-        Commands::CloneScript(_) => "clone-script",
-        Commands::CreateScript(_) => "create-script",
-        Commands::Push(_) => "push",
-        Commands::Pull(_) => "pull",
-        Commands::CreateDeployment(_) => "create-deployment",
-        Commands::UpdateDeployment(_) => "update-deployment",
-        Commands::DeleteDeployment(_) => "delete-deployment",
-        Commands::DeleteScript(_) => "delete-script",
-        Commands::CreateVersion(_) => "create-version",
-        Commands::ListVersions(_) => "list-versions",
-        Commands::ListDeployments(_) => "list-deployments",
-        Commands::ListScripts(_) => "list-scripts",
-        Commands::RunFunction(_) => "run-function",
-        Commands::TailLogs(_) => "tail-logs",
-        Commands::SetupLogs => "setup-logs",
-        Commands::ShowFileStatus => "show-file-status",
-        Commands::ListApis => "list-apis",
-        Commands::EnableApi(_) => "enable-api",
-        Commands::DisableApi(_) => "disable-api",
-        Commands::OpenScript(_) => "open-script",
-        Commands::OpenContainer => "open-container",
-        Commands::OpenWebApp(_) => "open-web-app",
-        Commands::OpenLogs => "open-logs",
-        Commands::OpenApiConsole => "open-api-console",
-        Commands::OpenCredentialsSetup => "open-credentials-setup",
-        Commands::StartMcpServer => "start-mcp-server",
-        Commands::External(_) => "external",
+        Commands::CloneScript(args) => {
+            crate::commands::clone_script::clone_script(
+                &context.client,
+                &config,
+                crate::commands::clone_script::CloneArgs {
+                    script_id: args.script_id.as_deref(),
+                    version_number: args.version_number.as_deref(),
+                    root_dir: args.root_dir.as_deref(),
+                    cwd: &cwd,
+                },
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::CreateScript(args) => {
+            crate::commands::create_script::create_script(
+                &context.client,
+                &config,
+                crate::commands::create_script::CreateScriptArgs {
+                    script_type: &args.script_type,
+                    title: args.title.as_deref(),
+                    parent_id: args.parent_id.as_deref(),
+                    root_dir: args.root_dir.as_deref(),
+                    cwd: &cwd,
+                },
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::Push(args) => {
+            crate::commands::push::push(
+                &context.client,
+                &config,
+                args.force,
+                args.watch,
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::Pull(args) => {
+            let id = crate::core::project::assert_script_configured(&config).await?;
+            let remote = crate::core::project::fetch_remote_files(
+                &context.client,
+                id,
+                &config,
+                &cwd,
+                args.version_number
+                    .as_deref()
+                    .map(|v| {
+                        v.parse().map_err(|_| {
+                            CrspError::Validation(format!("'{v}' is not a valid integer."))
+                        })
+                    })
+                    .transpose()?,
+            )
+            .await?;
+            crate::commands::pull::pull(
+                &context.client,
+                &config,
+                &remote.iter().map(|f| f.file.clone()).collect::<Vec<_>>(),
+                args.delete_unused_files,
+                args.force,
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::CreateDeployment(args) => {
+            crate::commands::create_deployment::create_deployment(
+                &context.client,
+                &config,
+                crate::commands::create_deployment::CreateDeploymentArgs {
+                    version_number: args.version_number.as_deref(),
+                    description: args.description.as_deref(),
+                    deployment_id: args.deployment_id.as_deref(),
+                },
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::UpdateDeployment(args) => {
+            crate::commands::update_deployment::update_deployment(
+                &context.client,
+                &config,
+                args.deployment_id.as_str(),
+                crate::commands::update_deployment::UpdateDeploymentArgs {
+                    version_number: args.version_number.as_deref(),
+                    description: args.description.as_deref(),
+                },
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::DeleteDeployment(args) => {
+            crate::commands::delete_deployment::delete_deployment(
+                &context.client,
+                &config,
+                args.deployment_id.as_deref(),
+                args.all,
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::DeleteScript(args) => {
+            crate::commands::delete_script::delete_script(
+                &context.client,
+                &config,
+                args.script_id.as_deref(),
+                args.force,
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::CreateVersion(args) => {
+            crate::commands::create_version::create_version(
+                &context.client,
+                &config,
+                args.description.as_deref(),
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::ListVersions(args) => {
+            crate::commands::list_versions::list_versions(
+                &context.client,
+                &config,
+                args.script_id.as_deref(),
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::ListDeployments(args) => {
+            crate::commands::list_deployments::list_deployments(
+                &context.client,
+                &config,
+                args.script_id.as_deref(),
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::ListScripts(args) => {
+            crate::commands::list_scripts::list_scripts(
+                &context.client,
+                args.no_shorten,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::RunFunction(args) => {
+            crate::commands::run_function::run_function(
+                &context.client,
+                &config,
+                crate::commands::run_function::RunFunctionArgs {
+                    function_name: args.function_name.as_deref(),
+                    nondev: args.nondev,
+                    params: args.params.as_deref(),
+                },
+                &ui,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::TailLogs(args) => {
+            crate::commands::tail_logs::tail_logs(
+                &context.client,
+                &mut config,
+                crate::commands::tail_logs::TailLogsArgs {
+                    watch: args.watch,
+                    simplified: args.simplified,
+                    ..Default::default()
+                },
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::SetupLogs => {
+            crate::commands::setup_logs::setup_logs(&mut config, &ui, &opener, &mut output).await?;
+        }
+        Commands::ShowFileStatus => {
+            crate::commands::show_file_status::show_file_status(&config, &mut output).await?;
+        }
+        Commands::ListApis => {
+            crate::commands::list_apis::list_apis(
+                &context.client,
+                &mut config,
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::EnableApi(args) => {
+            crate::commands::enable_api::enable_api(
+                &context.client,
+                &mut config,
+                &args.api,
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::DisableApi(args) => {
+            crate::commands::disable_api::disable_api(
+                &context.client,
+                &mut config,
+                &args.api,
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenScript(args) => {
+            crate::commands::open_script::open_script(
+                &context.client,
+                &config,
+                crate::commands::open_script::OpenScriptArgs {
+                    script_id: args.script_id.as_deref(),
+                },
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenContainer => {
+            crate::commands::open_container::open_container(
+                &context.client,
+                &config,
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenWebApp(args) => {
+            crate::commands::open_web_app::open_web_app(
+                &context.client,
+                &config,
+                crate::commands::open_web_app::OpenWebAppArgs {
+                    deployment_id: args.deployment_id.as_deref(),
+                },
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenLogs => {
+            crate::commands::open_logs::open_logs(
+                &context.client,
+                &mut config,
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenApiConsole => {
+            crate::commands::open_api_console::open_api_console(
+                &context.client,
+                &mut config,
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::OpenCredentialsSetup => {
+            crate::commands::open_credentials_setup::open_credentials_setup(
+                &context.client,
+                &mut config,
+                include_user_hint_in_url(),
+                &ui,
+                &opener,
+                &mut output,
+            )
+            .await?;
+        }
+        Commands::Login(_)
+        | Commands::Logout
+        | Commands::ShowAuthorizedUser
+        | Commands::StartMcpServer
+        | Commands::External(_) => unreachable!(),
     }
+    Ok(())
+}
+
+fn auth_path(auth: Option<&str>) -> Result<std::path::PathBuf, CrspError> {
+    let path = auth
+        .map(Path::new)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            home::home_dir()
+                .unwrap_or_default()
+                .join(crate::constants::CREDENTIALS_FILENAME)
+        });
+    Ok(if path.is_dir() {
+        path.join(crate::constants::CREDENTIALS_FILENAME)
+    } else {
+        path
+    })
 }

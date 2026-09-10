@@ -4,6 +4,7 @@
 //! validation, and generic pagination.
 
 pub mod apis;
+pub mod clasp;
 pub mod config;
 pub mod files;
 pub mod ignore;
