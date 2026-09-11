@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "google-clasp-rs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",

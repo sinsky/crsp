@@ -1,6 +1,6 @@
 [package]
 name = "google-clasp-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "crsp - The Apps Script CLI (Rust port of google/clasp)"
 license = "Apache-2.0"
