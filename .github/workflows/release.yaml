@@ -48,6 +48,21 @@ jobs:
         with:
           files: dist/crsp-${{ matrix.target }}.${{ matrix.archive }}
 
+  npm-stage:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm --version
+      - run: npm stage publish
+
   publish:
     needs: build
     runs-on: ubuntu-latest
