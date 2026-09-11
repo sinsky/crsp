@@ -1496,8 +1496,12 @@ async fn network_and_status_retry_counters_are_independent() {
     tokio::spawn(async move {
         let mut served = false;
         loop {
+            // A transient `accept` error (Windows can surface one when an
+            // earlier connection resets) must not tear down the listener
+            // before it serves its single 500; keep accepting.
             let Ok((mut socket, _)) = listener.accept().await else {
-                break;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                continue;
             };
             if !served {
                 served = true;
