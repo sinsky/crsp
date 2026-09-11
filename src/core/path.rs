@@ -176,8 +176,10 @@ fn drive_letter(path: &str) -> Option<char> {
 }
 
 /// Node `path.relative(from, to)` equivalent on lexically normalized paths.
-/// Returns an OS-native relative path string; equal paths yield `""`, and
-/// candidates on a different root (Windows drives) yield the absolute target.
+/// Returns a `/`-separated relative path string (spec §8 — Windows `\` is
+/// normalized so downstream glob/change-detection/API paths stay portable);
+/// equal paths yield `""`, and candidates on a different root (Windows
+/// drives) yield the absolute target.
 pub fn relative_path(from: &Path, to: &Path) -> String {
     let from = normalize_lexical(from);
     let to = normalize_lexical(to);
@@ -194,7 +196,7 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
         && (drive_letter(&from.to_string_lossy()).is_some()
             || drive_letter(&to.to_string_lossy()).is_some())
     {
-        return to.to_string_lossy().into_owned();
+        return normalize_slashes(&to.to_string_lossy()).into_owned();
     }
     let (from_first, to_first) = (from_components.next(), to_components.next());
     // Node only treats a Windows drive/prefix (or a POSIX root) as the "root"
@@ -215,7 +217,7 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
             _ => false,
         };
         if roots_differ {
-            return to.to_string_lossy().into_owned();
+            return normalize_slashes(&to.to_string_lossy()).into_owned();
         }
     }
     let mut from_rest: Vec<OsString> = from_first
@@ -243,14 +245,14 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
         .take_while(|(from, to)| from == to)
         .count();
 
-    let mut out = PathBuf::new();
+    let mut parts: Vec<String> = Vec::new();
     for _ in common..from_rest.len() {
-        out.push("..");
+        parts.push("..".to_string());
     }
     for component in &to_rest[common..] {
-        out.push(component);
+        parts.push(component.to_string_lossy().into_owned());
     }
-    out.to_string_lossy().into_owned()
+    parts.join("/")
 }
 
 #[cfg(test)]

@@ -115,7 +115,10 @@ async fn ignored_events_do_not_trigger_callback() {
     let stop = google_clasp_rs::commands::push::watch_files_filtered(
         directory.path(),
         Duration::from_millis(40),
-        |path| path.extension().and_then(|ext| ext.to_str()) != Some("txt"),
+        // Reject the ignored `.txt` file and directory-level events alike; a
+        // bare `extension != "txt"` check lets FSEvents' directory events
+        // through, which would spuriously stop the watcher on macOS.
+        |path| path.is_file() && path.extension().and_then(|ext| ext.to_str()) != Some("txt"),
         move |_| {
             let received = Arc::clone(&received);
             Box::pin(async move {
