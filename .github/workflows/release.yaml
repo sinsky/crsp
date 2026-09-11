@@ -103,7 +103,7 @@ jobs:
           ls -R npm/*/bin
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - run: npm --version
       - name: Publish platform packages on first release
@@ -111,13 +111,12 @@ jobs:
           rm -f .first-published
           for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
             name=$(node -p "require('./$dir/package.json').name")
-            version=$(node -p "require('./$dir/package.json').version")
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "$name@$version already registered"
+            if npm view "$name" name >/dev/null 2>&1; then
+              echo "$name is already registered in npm registry"
             else
-              echo "$name@$version not registered, publishing normally for first release"
-              npm --prefix "$dir" publish
-              echo "$name@$version" >> .first-published
+              echo "$name is not registered yet, publishing normally for first release"
+              (cd "$dir" && npm publish)
+              echo "$name" >> .first-published
             fi
           done
       - name: Stage npm packages
@@ -126,11 +125,10 @@ jobs:
           npm stage publish
           for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
             name=$(node -p "require('./$dir/package.json').name")
-            version=$(node -p "require('./$dir/package.json').version")
-            if [ -f .first-published ] && grep -Fxq "$name@$version" .first-published; then
-              echo "skip stage publish for $name@$version (published normally just before)"
+            if [ -f .first-published ] && grep -Fxq "$name" .first-published; then
+              echo "skip stage publish for $name (published normally just before)"
             else
-              npm --prefix "$dir" stage publish
+              (cd "$dir" && npm stage publish)
             fi
           done
 

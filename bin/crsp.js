@@ -15,7 +15,13 @@ const PLATFORM_PACKAGES = [
 const exeName = process.platform === 'win32' ? 'crsp-bin.exe' : 'crsp-bin';
 
 function resolveBinary() {
-  for (const platform of PLATFORM_PACKAGES) {
+  const currentKey = `${process.platform}-${process.arch}`;
+  const searchOrder = [
+    currentKey,
+    ...PLATFORM_PACKAGES.filter((p) => p !== currentKey),
+  ];
+
+  for (const platform of searchOrder) {
     const pkgName = `@sinsky-gh/crsp-${platform}`;
     try {
       const pkgPath = path.dirname(require.resolve(`${pkgName}/package.json`));
@@ -27,6 +33,14 @@ function resolveBinary() {
       // not installed for this platform, try next
     }
   }
+
+  for (const platform of searchOrder) {
+    const localBin = path.join(__dirname, '..', 'npm', platform, 'bin', exeName);
+    if (fs.existsSync(localBin)) {
+      return localBin;
+    }
+  }
+
   return null;
 }
 
