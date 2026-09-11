@@ -1,0 +1,16 @@
+{
+  "name": "@sinsky-gh/crsp-linux-arm64",
+  "version": "0.1.0",
+  "description": "crsp prebuilt binary for linux-arm64",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sinsky/crsp.git"
+  },
+  "license": "Apache-2.0"
+}
