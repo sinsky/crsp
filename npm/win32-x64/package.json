@@ -1,0 +1,16 @@
+{
+  "name": "@sinsky-gh/crsp-win32-x64",
+  "version": "0.1.0",
+  "description": "crsp prebuilt binary for win32-x64",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sinsky/crsp.git"
+  },
+  "license": "Apache-2.0"
+}
