@@ -1495,21 +1495,30 @@ async fn network_and_status_retry_counters_are_independent() {
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move {
         let mut served = false;
+        let mut accepted = 0usize;
+        eprintln!("retry-listener: task started");
         loop {
             // A transient `accept` error (Windows can surface one when an
             // earlier connection resets) must not tear down the listener
             // before it serves its single 500; keep accepting.
-            let Ok((mut socket, _)) = listener.accept().await else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                continue;
+            let (mut socket, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    eprintln!("retry-listener: accept error: {error}");
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    continue;
+                }
             };
+            accepted += 1;
+            eprintln!("retry-listener: accept #{accepted}, served={served}");
             if !served {
                 served = true;
-                let _ = socket
+                let result = socket
                     .write_all(
                         b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                     )
                     .await;
+                eprintln!("retry-listener: write 500 ok={}", result.is_ok());
             }
             // Subsequent connections are dropped without a response.
         }
