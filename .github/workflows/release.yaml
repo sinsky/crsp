@@ -94,6 +94,7 @@ jobs:
           path: npm-artifacts
       - name: Restore npm platform binaries
         run: |
+          mkdir -p npm/linux-x64/bin npm/linux-arm64/bin npm/darwin-arm64/bin npm/darwin-x64/bin npm/win32-x64/bin
           cp -r npm-artifacts/npm-bin-x86_64-unknown-linux-musl/. npm/linux-x64/bin/
           cp -r npm-artifacts/npm-bin-aarch64-unknown-linux-musl/. npm/linux-arm64/bin/
           cp -r npm-artifacts/npm-bin-aarch64-apple-darwin/. npm/darwin-arm64/bin/
