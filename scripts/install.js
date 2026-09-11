@@ -17,6 +17,11 @@ const PLATFORM_MAP = {
     archive: `crsp-x86_64-unknown-linux-gnu.tar.gz`,
     binary: 'crsp-x86_64-unknown-linux-gnu/crsp',
   },
+  'linux-arm64': {
+    target: 'aarch64-unknown-linux-gnu',
+    archive: `crsp-aarch64-unknown-linux-gnu.tar.gz`,
+    binary: 'crsp-aarch64-unknown-linux-gnu/crsp',
+  },
   'win32-x64': {
     target: 'x86_64-pc-windows-msvc',
     archive: `crsp-x86_64-pc-windows-msvc.zip`,
