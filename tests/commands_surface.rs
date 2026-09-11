@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+use clap::CommandFactory;
+use google_clasp_rs::Cli;
 use predicates::str::contains;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -359,4 +361,51 @@ async fn api_commands_fail_locally_without_credentials_like_clasp() {
         0,
         "the auth guard must fire before any request"
     );
+}
+
+const CANONICAL_COMMANDS: &[&str] = &[
+    "login",
+    "logout",
+    "show-authorized-user",
+    "clone-script",
+    "create-script",
+    "push",
+    "pull",
+    "create-deployment",
+    "update-deployment",
+    "delete-deployment",
+    "delete-script",
+    "create-version",
+    "list-versions",
+    "list-deployments",
+    "list-scripts",
+    "run-function",
+    "tail-logs",
+    "setup-logs",
+    "show-file-status",
+    "list-apis",
+    "enable-api",
+    "disable-api",
+    "open-script",
+    "open-container",
+    "open-web-app",
+    "open-logs",
+    "open-api-console",
+    "open-credentials-setup",
+    "start-mcp-server",
+];
+
+#[test]
+fn all_canonical_commands_are_registered() {
+    let names: Vec<_> = Cli::command()
+        .get_subcommands()
+        .map(|subcommand| subcommand.get_name().to_string())
+        .collect();
+    assert_eq!(CANONICAL_COMMANDS.len(), 29);
+    for command in CANONICAL_COMMANDS {
+        assert!(
+            names.iter().any(|name| name == command),
+            "missing subcommand `{command}`"
+        );
+    }
 }
