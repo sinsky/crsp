@@ -323,7 +323,7 @@ async fn run_mcp(
     project_dir: &Path,
     home: &Path,
 ) -> Result<(), String> {
-    use std::io::{BufRead, Read};
+    use std::io::BufRead;
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_crsp"));
     command
@@ -352,8 +352,25 @@ async fn run_mcp(
         .expect("spawn mcp server");
     let mut stdin = child.stdin.take().expect("mcp stdin");
     let stdout = child.stdout.take().expect("mcp stdout");
-    let mut stderr = String::new();
-    let mut stderr_reader = std::io::BufReader::new(child.stderr.take().expect("mcp stderr"));
+    // Drain stderr concurrently: Windows anonymous pipes are much smaller than
+    // Unix's, so a server that logs while the harness waits on stdout would
+    // deadlock if stderr were only read after the steps.
+    let stderr = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let stderr = std::sync::Arc::clone(&stderr);
+        let mut reader = std::io::BufReader::new(child.stderr.take().expect("mcp stderr"));
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => stderr.lock().unwrap().push_str(&line),
+                }
+            }
+        });
+    }
 
     // Bounded reads (T9 pattern): a worker thread feeds response lines into a
     // channel; every step waits at most 5s so a stalled server fails the case
@@ -383,20 +400,28 @@ async fn run_mcp(
 
     let mut failures = Vec::new();
     let project_text = project_dir.to_string_lossy().to_string();
-    'steps: for step in &case.expected.mcp_steps {
-        let send = step.send.replace(golden::TMP_TOKEN, &project_text);
+    // `send` is a JSON document, so a Windows path must be JSON-escaped before
+    // substitution; a raw `C:\...` would inject an invalid `\U` escape and the
+    // server would drop the request.
+    let project_text_send = project_text.replace('\\', "\\\\");
+    'steps: for (step_index, step) in case.expected.mcp_steps.iter().enumerate() {
+        let send = step.send.replace(golden::TMP_TOKEN, &project_text_send);
         if let Err(error) = stdin.write_all(format!("{send}\n").as_bytes()) {
             failures.push(format!("mcp write failed: {error}"));
             break;
         }
-        let line = match line_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        // Generous bound: Windows CI can be slow to start the child and serve
+        // the first response; the timeout still prevents a true hang.
+        let line = match line_rx.recv_timeout(std::time::Duration::from_secs(30)) {
             Ok(Ok(line)) => line,
             Ok(Err(error)) => {
                 failures.push(format!("mcp read failed: {error}"));
                 break 'steps;
             }
             Err(_) => {
-                failures.push("mcp read timed out after 5s".to_string());
+                failures.push(format!(
+                    "mcp read timed out after 30s at step {step_index}: {send}"
+                ));
                 break 'steps;
             }
         };
@@ -436,8 +461,8 @@ async fn run_mcp(
         }
     }
     drop(stdin);
-    let _ = stderr_reader.read_to_string(&mut stderr);
     let status = child.wait().expect("wait for mcp server");
+    let stderr = stderr.lock().unwrap().clone();
     if !status.success() {
         failures.push(format!("mcp server exited {status}: {stderr}"));
     }

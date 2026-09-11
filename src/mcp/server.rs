@@ -15,7 +15,7 @@ use crate::api::{ApiClient, ApiClientConfig, BaseUrls};
 use crate::commands::shared::pull_initial_files;
 use crate::core::config::ProjectConfig;
 use crate::core::files::{LocalExtensions, pull_files};
-use crate::core::path::PathJail;
+use crate::core::path::{PathJail, normalize_slashes};
 use crate::core::project::{create_script, fetch_remote_files, list_scripts};
 use crate::error::CrspError;
 
@@ -198,7 +198,7 @@ fn success_with_files(
 ) -> CallToolResult {
     let absolute_files: Vec<String> = files
         .iter()
-        .map(|file| resolved_dir.join(file).to_string_lossy().into_owned())
+        .map(|file| normalize_slashes(&resolved_dir.join(file).to_string_lossy()).into_owned())
         .collect();
     let mut content = vec![ContentBlock::text(message)];
     content.extend(

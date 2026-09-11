@@ -63,8 +63,8 @@ impl PathJail {
         if resolved != base && !Self::is_inside(&base, &resolved) {
             return Err(CrspError::Validation(
                 i18n::content_dir_resolves_outside_project_root(
-                    &resolved.to_string_lossy(),
-                    &base.to_string_lossy(),
+                    &normalize_slashes(&resolved.to_string_lossy()),
+                    &normalize_slashes(&base.to_string_lossy()),
                 ),
             ));
         }
@@ -92,7 +92,7 @@ impl PathJail {
             .any(|base| resolved == **base || Self::is_inside(base, &resolved));
         if !allowed {
             return Err(CrspError::Validation(i18n::project_dir_not_permitted(
-                &resolved.to_string_lossy(),
+                &normalize_slashes(&resolved.to_string_lossy()),
             )));
         }
         Ok(resolved)

@@ -281,14 +281,27 @@ pub fn normalize(
     home_dir: &str,
 ) -> String {
     let mut replaced = text.replace(mock_origin, MOCK_ORIGIN_TOKEN);
-    // Order matters for the MCP layout where the project lives inside $HOME:
-    // the longer (project) path must be replaced before the home prefix.
-    if project_dir.len() > home_dir.len() {
-        replaced = replaced.replace(project_dir, TMP_TOKEN);
-        replaced = replaced.replace(home_dir, TMP_TOKEN);
-    } else {
-        replaced = replaced.replace(home_dir, TMP_TOKEN);
-        replaced = replaced.replace(project_dir, TMP_TOKEN);
+    // Replace paths in both raw and JSON-escaped form: inside serialized JSON a
+    // Windows `\` appears as `\\`, so the raw path alone would not match.
+    // Longer (project) paths go first so a project nested under $HOME is not
+    // partially replaced by the home prefix.
+    let project_escaped = project_dir.replace('\\', "\\\\");
+    let home_escaped = home_dir.replace('\\', "\\\\");
+    let project_forward = project_dir.replace('\\', "/");
+    let home_forward = home_dir.replace('\\', "/");
+    let mut replacements: Vec<(&str, &str)> = vec![
+        (project_dir, TMP_TOKEN),
+        (home_dir, TMP_TOKEN),
+        (&project_escaped, TMP_TOKEN),
+        (&home_escaped, TMP_TOKEN),
+        (&project_forward, TMP_TOKEN),
+        (&home_forward, TMP_TOKEN),
+    ];
+    replacements.sort_by_key(|(pattern, _)| std::cmp::Reverse(pattern.len()));
+    for (pattern, token) in replacements {
+        if !pattern.is_empty() {
+            replaced = replaced.replace(pattern, token);
+        }
     }
     for secret in secrets {
         replaced = replaced.replace(secret, MASKED_TOKEN);
