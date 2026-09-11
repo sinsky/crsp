@@ -10,6 +10,14 @@ readme = "README.md"
 documentation = "https://docs.rs/google-clasp-rs"
 keywords = ["google-apps-script", "apps-script", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate to user-facing material: internal design specs and
+# plans, CI workflows, and dev-tooling config stay out of the crates.io tarball.
+exclude = [
+    "docs/superpowers/**",
+    ".github/**",
+    "mise.toml",
+    "docs/live-verification.md",
+]
 
 [[bin]]
 name = "crsp"
