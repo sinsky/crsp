@@ -8,12 +8,15 @@
   "bin": {
     "crsp": "bin/crsp.js"
   },
-  "scripts": {
-    "postinstall": "node scripts/install.js"
+  "optionalDependencies": {
+    "@sinsky-gh/crsp-darwin-arm64": "0.1.0",
+    "@sinsky-gh/crsp-darwin-x64": "0.1.0",
+    "@sinsky-gh/crsp-linux-x64": "0.1.0",
+    "@sinsky-gh/crsp-linux-arm64": "0.1.0",
+    "@sinsky-gh/crsp-win32-x64": "0.1.0"
   },
   "files": [
     "bin",
-    "scripts",
     "README.md",
     "LICENSE"
   ],
