@@ -106,11 +106,32 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm --version
+      - name: Publish platform packages on first release
+        run: |
+          rm -f .first-published
+          for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already registered"
+            else
+              echo "$name@$version not registered, publishing normally for first release"
+              npm --prefix "$dir" publish
+              echo "$name@$version" >> .first-published
+            fi
+          done
       - name: Stage npm packages
         run: |
+          # stage後の承認手順: npm stage approve <stage-id>（2FA必須）または npmjs.com のStaged PackagesタブでApprove。CI自動化はしない（2FA必須のため手動が正）。
           npm stage publish
           for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
-            npm --prefix "$dir" stage publish
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if [ -f .first-published ] && grep -qx "$name@$version" .first-published; then
+              echo "skip stage publish for $name@$version (published normally just before)"
+            else
+              npm --prefix "$dir" stage publish
+            fi
           done
 
   publish:
