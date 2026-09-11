@@ -55,12 +55,19 @@ fn worker_count() -> usize {
 
 #[test]
 fn canonical_commands_have_command_specific_binary_outcomes() {
+    // Windows reports a missing creds path as `The system cannot find the path
+    // specified. (os error 3)`; Unix as `No such file or directory`.
+    let missing_file_text = if cfg!(windows) {
+        "cannot find the path"
+    } else {
+        "No such file"
+    };
     let cases: &[(&str, &[&str], i32, &str)] = &[
         (
             "login",
             &["--creds", "/missing/client.json"],
             1,
-            "No such file",
+            missing_file_text,
         ),
         ("logout", &["--json"], 0, "\"success\": true"),
         (

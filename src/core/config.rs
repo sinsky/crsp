@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::constants::{PROJECT_CONFIG_FILENAME, PROJECT_IGNORE_FILENAME};
 use crate::core::ignore::IgnoreMatcher;
-use crate::core::path::{PathJail, normalize_lexical, relative_path};
+use crate::core::path::{PathJail, normalize_lexical, normalize_slashes, relative_path};
 use crate::error::CrspError;
 use crate::i18n;
 
@@ -119,17 +119,23 @@ impl ProjectConfig {
         // SECURITY: strict validation — the resolved content dir must be the
         // root or inside it, both lexically and physically via realpath
         // (skipped when symlinks are allowed; clasp.ts:206-221).
-        let root_real = tokio::fs::canonicalize(&project_root_dir)
-            .await
-            .unwrap_or_else(|_| project_root_dir.clone());
-        let content_real = tokio::fs::canonicalize(&content_dir)
-            .await
-            .unwrap_or_else(|_| content_dir.clone());
+        // The physical check runs only when BOTH paths canonicalize. On
+        // Windows `canonicalize` returns a `\\?\` verbatim path and fails for a
+        // content dir that does not exist yet (e.g. a clone target); mixing a
+        // canonical root with a lexical content dir would false-positive an
+        // escape, so the lexical check governs that case.
         let lexical_ok =
             content_dir == project_root_dir || PathJail::is_inside(&project_root_dir, &content_dir);
         let real_ok = allow_symlinks
-            || content_real == root_real
-            || PathJail::is_inside(&root_real, &content_real);
+            || match (
+                tokio::fs::canonicalize(&project_root_dir).await,
+                tokio::fs::canonicalize(&content_dir).await,
+            ) {
+                (Ok(root_real), Ok(content_real)) => {
+                    content_real == root_real || PathJail::is_inside(&root_real, &content_real)
+                }
+                _ => true,
+            };
         if !(lexical_ok && real_ok) {
             // Display follows clasp's `config.srcDir ?? config.rootDir`:
             // an empty-string srcDir still wins over rootDir.
@@ -140,8 +146,8 @@ impl ProjectConfig {
                 .unwrap_or("undefined");
             return Err(CrspError::Config(i18n::src_dir_escapes_project_root(
                 raw_display,
-                &content_dir.to_string_lossy(),
-                &project_root_dir.to_string_lossy(),
+                &normalize_slashes(&content_dir.to_string_lossy()),
+                &normalize_slashes(&project_root_dir.to_string_lossy()),
             )));
         }
 
