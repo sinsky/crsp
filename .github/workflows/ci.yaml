@@ -16,7 +16,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
     strategy:
@@ -27,5 +27,5 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --no-fail-fast
-      - run: cargo build --release
+      - run: cargo test --locked --no-fail-fast
+      - run: cargo build --release --locked
