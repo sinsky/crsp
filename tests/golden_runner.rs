@@ -400,8 +400,12 @@ async fn run_mcp(
 
     let mut failures = Vec::new();
     let project_text = project_dir.to_string_lossy().to_string();
+    // `send` is a JSON document, so a Windows path must be JSON-escaped before
+    // substitution; a raw `C:\...` would inject an invalid `\U` escape and the
+    // server would drop the request.
+    let project_text_send = project_text.replace('\\', "\\\\");
     'steps: for (step_index, step) in case.expected.mcp_steps.iter().enumerate() {
-        let send = step.send.replace(golden::TMP_TOKEN, &project_text);
+        let send = step.send.replace(golden::TMP_TOKEN, &project_text_send);
         if let Err(error) = stdin.write_all(format!("{send}\n").as_bytes()) {
             failures.push(format!("mcp write failed: {error}"));
             break;
