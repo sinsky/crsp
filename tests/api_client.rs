@@ -24,7 +24,7 @@ use google_clasp_rs::constants::{
     SCRIPT_API_BASE_URL, SERVICE_USAGE_API_BASE_URL, USERINFO_API_BASE_URL,
 };
 use google_clasp_rs::error::CrspError;
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -1495,32 +1495,35 @@ async fn network_and_status_retry_counters_are_independent() {
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move {
         let mut served = false;
-        let mut accepted = 0usize;
-        eprintln!("retry-listener: task started");
         loop {
             // A transient `accept` error (Windows can surface one when an
             // earlier connection resets) must not tear down the listener
             // before it serves its single 500; keep accepting.
             let (mut socket, _) = match listener.accept().await {
                 Ok(pair) => pair,
-                Err(error) => {
-                    eprintln!("retry-listener: accept error: {error}");
+                Err(_) => {
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     continue;
                 }
             };
-            accepted += 1;
-            eprintln!("retry-listener: accept #{accepted}, served={served}");
             if !served {
                 served = true;
-                let result = socket
+                // Read the request before replying. Closing a socket that
+                // still holds unread request bytes sends a TCP RST, which on
+                // Windows can discard the buffered 500; consuming the request
+                // and shutting down gracefully delivers it reliably.
+                let mut request = [0u8; 1024];
+                let _ = socket.read(&mut request).await;
+                let _ = socket
                     .write_all(
                         b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                     )
                     .await;
-                eprintln!("retry-listener: write 500 ok={}", result.is_ok());
+                let _ = socket.shutdown().await;
             }
-            // Subsequent connections are dropped without a response.
+            // Subsequent connections are dropped without a response: the
+            // request bytes stay unread, so the close is a reset the client
+            // observes as a network error.
         }
     });
     let base = format!("http://127.0.0.1:{port}");
