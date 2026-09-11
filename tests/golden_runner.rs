@@ -389,14 +389,16 @@ async fn run_mcp(
             failures.push(format!("mcp write failed: {error}"));
             break;
         }
-        let line = match line_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        // Generous bound: Windows CI can be slow to start the child and serve
+        // the first response; the timeout still prevents a true hang.
+        let line = match line_rx.recv_timeout(std::time::Duration::from_secs(30)) {
             Ok(Ok(line)) => line,
             Ok(Err(error)) => {
                 failures.push(format!("mcp read failed: {error}"));
                 break 'steps;
             }
             Err(_) => {
-                failures.push("mcp read timed out after 5s".to_string());
+                failures.push("mcp read timed out after 30s".to_string());
                 break 'steps;
             }
         };

@@ -191,8 +191,8 @@ async fn src_dir_outside_project_root_is_rejected() {
             "Security Error: srcDir \"../outside\" escapes project root.\n  \
              Resolved: {}\n  Project root: {}\n\
              This may indicate a malicious .clasp.json file attempting path traversal.",
-            resolved.display(),
-            root.display()
+            resolved.to_string_lossy().replace('\\', "/"),
+            root.to_string_lossy().replace('\\', "/")
         )
     );
     drop(dir);

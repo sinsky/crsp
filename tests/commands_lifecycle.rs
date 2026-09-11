@@ -888,8 +888,13 @@ async fn create_root_dir_escape_is_rejected_before_type_check() {
         format!(
             "Security Error: Content directory \"{}\" resolves outside the project root \"{}\". \
              This may indicate a path traversal attempt.",
-            temp.path().parent().unwrap().join("escape").display(),
-            temp.path().display()
+            temp.path()
+                .parent()
+                .unwrap()
+                .join("escape")
+                .to_string_lossy()
+                .replace('\\', "/"),
+            temp.path().to_string_lossy().replace('\\', "/")
         )
     );
     assert!(received(&server).await.is_empty());
