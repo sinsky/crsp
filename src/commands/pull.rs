@@ -91,16 +91,92 @@ pub async fn pull<A: PromptAdapter>(
     } else {
         Vec::new()
     };
+    // clasp deleteLocalFiles:148-153: contentDir itself must not be a
+    // symlink (unless allowSymlinks); fail before any prompt, even when
+    // there is nothing to delete.
+    // clasp `path.resolve(contentDir)`: relative content dirs resolve
+    // against the process cwd; test/absolute configs pass through.
+    let absolute_content_dir = if config.content_dir.is_absolute() {
+        config.content_dir.clone()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&config.content_dir))
+            .unwrap_or_else(|_| config.content_dir.clone())
+    };
+    if delete_unused && (force || ui.is_interactive()) && !config.allow_symlinks {
+        let link = fs::symlink_metadata(&absolute_content_dir)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if link {
+            // clasp pull.ts:148-153 compares `realpath(contentDir)` with the
+            // resolved path verbatim; on macOS `/tmp` itself resolves under
+            // `/private`, so only a directly-symlinked content dir fails.
+            // A stricter ancestor check would false-positive on TempDir and
+            // real projects mounted through symlinked parents.
+            return Err(CrspError::Validation(
+                "Security Error: Content directory is a symlink. Possible race attack.".to_string(),
+            ));
+        }
+    }
     if !files_to_delete.is_empty() {
-        let confirmed = force
-            || ui.confirm(PromptConfirm {
-                prompt: "Delete unused files?".to_string(),
-                default: false,
-            })?;
-        if confirmed {
+        let real_content_dir = if config.allow_symlinks {
+            absolute_content_dir.clone()
+        } else {
+            fs::canonicalize(&absolute_content_dir).unwrap_or_else(|_| absolute_content_dir.clone())
+        };
+        if force {
             for file in files_to_delete {
-                let target = config.content_dir.join(&file.local_path);
-                if delete_bound(&config.content_dir, &target, config.allow_symlinks)? {
+                // clasp `deleteLocalFiles` reports the collected `localPath`
+                // verbatim; in crsp that already is the cwd-relative display
+                // path (`collect_local_files` returns contentDir-relative
+                // names here because cwd == contentDir's parent in tests, and
+                // production callers pass cwd-relative remotes through the
+                // same jail).
+                let display = file.local_path.clone();
+                if !is_safe_to_delete(
+                    &real_content_dir,
+                    &absolute_content_dir,
+                    &file.local_path,
+                    config.allow_symlinks,
+                ) {
+                    return Err(CrspError::Validation(format!(
+                        "Security Error: Attempted to delete unsafe file: {display}"
+                    )));
+                }
+                let target = absolute_content_dir.join(&file.local_path);
+                delete_bound(
+                    &absolute_content_dir,
+                    &target,
+                    &display,
+                    config.allow_symlinks,
+                )?;
+                result.deleted.push(file.local_path.clone());
+            }
+        } else {
+            for file in files_to_delete {
+                let display = file.local_path.clone();
+                if !is_safe_to_delete(
+                    &real_content_dir,
+                    &absolute_content_dir,
+                    &file.local_path,
+                    config.allow_symlinks,
+                ) {
+                    return Err(CrspError::Validation(format!(
+                        "Security Error: Attempted to delete unsafe file: {display}"
+                    )));
+                }
+                let confirmed = ui.confirm(PromptConfirm {
+                    prompt: format!("Delete {display}?"),
+                    default: false,
+                })?;
+                if confirmed {
+                    let target = absolute_content_dir.join(&file.local_path);
+                    delete_bound(
+                        &absolute_content_dir,
+                        &target,
+                        &display,
+                        config.allow_symlinks,
+                    )?;
                     result.deleted.push(file.local_path.clone());
                 }
             }
@@ -145,18 +221,68 @@ pub async fn pull<A: PromptAdapter>(
     Ok(result)
 }
 
+/// clasp `isSafeToDelete` (pull.ts:190-223): resolved target must be inside
+/// the real content dir, no symlinked parent, and the target itself must
+/// exist as a non-symlink. `Err` is only I/O that cannot be classified here;
+/// every `false` becomes clasp's Security Error at the call site.
+fn is_safe_to_delete(
+    real_content_dir: &Path,
+    content_dir: &Path,
+    relative: &str,
+    allow_symlinks: bool,
+) -> bool {
+    let target = content_dir.join(relative.replace('\\', "/"));
+    // `real_content_dir` is canonical while `target` may carry a symlinked
+    // ancestor above the content dir (macOS `/var` -> `/private/var`), so
+    // canonicalize before the containment check (clasp `isInside(realDir,
+    // path.resolve(localPath))` sees resolved paths through Node).
+    let canonical_target = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
+    if canonical_target != *real_content_dir
+        && !crate::core::path::PathJail::is_inside(real_content_dir, &canonical_target)
+    {
+        return false;
+    }
+    if !allow_symlinks {
+        let mut current = target.parent().unwrap_or(content_dir).to_path_buf();
+        while current != *real_content_dir
+            && crate::core::path::PathJail::is_inside(real_content_dir, &current)
+        {
+            // clasp `realpath(current) !== current`: the walk itself is done
+            // on canonical paths, so compare against the canonical form to
+            // avoid false positives from symlinked ancestors above the
+            // content dir (e.g. macOS `/var` -> `/private/var`).
+            let canonical_current = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+            if canonical_current != current {
+                return false;
+            }
+            match current.parent() {
+                Some(parent) => current = parent.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) => allow_symlinks || !metadata.file_type().is_symlink(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(unix)]
 fn delete_bound(
     content_dir: &Path,
     target: &Path,
+    local_path: &str,
     allow_symlinks: bool,
 ) -> Result<bool, CrspError> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    if !Path::new(target).starts_with(content_dir)
-        || (!allow_symlinks && fs::symlink_metadata(target)?.file_type().is_symlink())
-    {
-        return Ok(false);
+    // The `is_safe_to_delete` gate already classified every clasp failure as
+    // a Security Error; only a `realpath` mismatch between the joined target
+    // and the resolved path can still slip through lexical checks here.
+    if !Path::new(target).starts_with(content_dir) {
+        return Err(CrspError::Validation(format!(
+            "Security Error: Attempted to delete unsafe file: {local_path}"
+        )));
     }
     let parent = target.parent().unwrap_or(content_dir);
     let name = target.file_name().unwrap();
@@ -194,9 +320,12 @@ fn delete_bound(
     unsafe {
         libc::close(fd);
     }
+    // clasp pull.ts:155-160: every `isSafeToDelete` false is a command-level
+    // failure, never a silent skip. `O_NOFOLLOW`/`unlinkat` remains the
+    // race-safe deletion mechanism; post-`isSafeToDelete` I/O races after the
+    // gate still propagate as I/O errors (ENOENT included).
     match unlink_error {
         None => Ok(true),
-        Some(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(false),
         Some(error) => Err(error.into()),
     }
 }
@@ -205,12 +334,15 @@ fn delete_bound(
 fn delete_bound(
     content_dir: &Path,
     target: &Path,
-    allow_symlinks: bool,
+    local_path: &str,
+    _allow_symlinks: bool,
 ) -> Result<bool, CrspError> {
-    if !target.starts_with(content_dir)
-        || (!allow_symlinks && fs::symlink_metadata(target)?.file_type().is_symlink())
-    {
-        return Ok(false);
+    // The `is_safe_to_delete` gate already classified every clasp failure as
+    // a Security Error; keep the lexical guard as defense in depth.
+    if !target.starts_with(content_dir) {
+        return Err(CrspError::Validation(format!(
+            "Security Error: Attempted to delete unsafe file: {local_path}"
+        )));
     }
     fs::remove_file(target)?;
     Ok(true)
@@ -218,4 +350,48 @@ fn delete_bound(
 
 pub fn content_dir(config: &ProjectConfig) -> &Path {
     &config.content_dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_to_delete;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn deletion_safety_rejects_outside_and_missing_targets() {
+        let temp = TempDir::new().unwrap();
+        let content = temp.path().join("content");
+        fs::create_dir_all(&content).unwrap();
+
+        assert!(!is_safe_to_delete(
+            &content,
+            &content,
+            "../outside.js",
+            false
+        ));
+        assert!(!is_safe_to_delete(&content, &content, "missing.js", false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deletion_safety_rejects_symlink_parent_and_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let content = temp.path().join("content");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&content).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("kept.js"), "kept").unwrap();
+        symlink(&outside, content.join("linked")).unwrap();
+        fs::write(content.join("plain.js"), "plain").unwrap();
+        symlink(outside.join("kept.js"), content.join("file-link.js")).unwrap();
+
+        let real = fs::canonicalize(&content).unwrap_or_else(|_| content.clone());
+        assert!(is_safe_to_delete(&real, &content, "plain.js", false));
+        assert!(!is_safe_to_delete(&real, &content, "linked/kept.js", false));
+        assert!(!is_safe_to_delete(&real, &content, "file-link.js", false));
+        assert!(outside.join("kept.js").exists());
+    }
 }

@@ -40,6 +40,7 @@ fn api_client(base: &str) -> ApiClient {
 struct TestPrompt {
     interactive: bool,
     answer: bool,
+    confirmations: std::cell::RefCell<Vec<String>>,
 }
 impl PromptAdapter for TestPrompt {
     fn is_interactive(&self) -> bool {
@@ -54,7 +55,8 @@ impl PromptAdapter for TestPrompt {
     fn multi_select(&self, _: &PromptMultiSelect) -> std::io::Result<Vec<String>> {
         Ok(Vec::new())
     }
-    fn confirm(&self, _: &PromptConfirm) -> std::io::Result<bool> {
+    fn confirm(&self, spec: &PromptConfirm) -> std::io::Result<bool> {
+        self.confirmations.borrow_mut().push(spec.prompt.clone());
         Ok(self.answer)
     }
     fn dialog(&self, _: &PromptDialog) -> std::io::Result<String> {
@@ -563,6 +565,7 @@ async fn pull_deletion_force_and_confirm_paths_report_deleted_files() {
     let ui = Ui::new(TestPrompt {
         interactive: true,
         answer: true,
+        confirmations: std::cell::RefCell::new(Vec::new()),
     });
     let result = pull_command(
         &config(temp.path()),
@@ -578,6 +581,78 @@ async fn pull_deletion_force_and_confirm_paths_report_deleted_files() {
     assert!(result.deleted.contains(&"old.js".to_string()));
     assert!(!src.join("old.js").exists());
     assert!(String::from_utf8(out).unwrap().contains("deleted"));
+}
+
+#[tokio::test]
+async fn pull_deletion_prompts_once_per_file() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("first.js"), "first").unwrap();
+    fs::write(src.join("second.js"), "second").unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    let prompt = TestPrompt {
+        interactive: true,
+        answer: true,
+        confirmations: std::cell::RefCell::new(Vec::new()),
+    };
+    let ui = Ui::new(prompt);
+    let result = pull_command(
+        &config(temp.path()),
+        temp.path(),
+        &[],
+        true,
+        false,
+        &ui,
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.deleted.len(), 2);
+    assert!(!src.join("first.js").exists());
+    assert!(!src.join("second.js").exists());
+    let stdout = String::from_utf8(out).unwrap();
+    assert!(stdout.contains("Deleted src/first.js"));
+    assert!(stdout.contains("Deleted src/second.js"));
+    let confirmations = ui.into_adapter().confirmations.into_inner();
+    assert_eq!(confirmations.len(), 2);
+    assert!(confirmations.contains(&"Delete first.js?".to_string()));
+    assert!(confirmations.contains(&"Delete second.js?".to_string()));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pull_deletion_fails_with_security_error_on_symlinked_content_dir() {
+    use std::os::unix::fs::symlink;
+
+    // clasp pull.ts:148-153: a symlinked content dir fails before any prompt
+    // with `Security Error: Content directory is a symlink`.
+    let temp = TempDir::new().unwrap();
+    let real = temp.path().join("real");
+    let content = temp.path().join("content");
+    fs::create_dir_all(&real).unwrap();
+    fs::write(real.join("old.js"), "old").unwrap();
+    symlink(&real, &content).unwrap();
+    let mut config = config(temp.path());
+    config.content_dir = content.clone();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut output = Output::new(false, &mut out, &mut err);
+    let error = pull_command(
+        &config,
+        temp.path(),
+        &[],
+        true,
+        true,
+        &Ui::new(TestPrompt::default()),
+        &mut output,
+    )
+    .await
+    .expect_err("clasp fails the command with a Security Error");
+    assert!(error.to_string().contains("Content directory is a symlink"));
+    assert!(real.join("old.js").exists());
 }
 
 #[tokio::test]
