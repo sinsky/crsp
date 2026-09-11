@@ -16,15 +16,23 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: tar.gz
+            npm_dir: npm/linux-x64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
+            npm_dir: npm/linux-arm64
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            npm_dir: npm/darwin-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            npm_dir: npm/darwin-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            npm_dir: npm/win32-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -45,6 +53,16 @@ jobs:
             cp target/${{ matrix.target }}/release/crsp dist/crsp-${{ matrix.target }}/
           fi
           cp LICENSE README.md dist/crsp-${{ matrix.target }}/
+      - name: Stage npm platform package
+        shell: bash
+        run: |
+          mkdir -p ${{ matrix.npm_dir }}/bin
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/crsp.exe ${{ matrix.npm_dir }}/bin/crsp-bin.exe
+          else
+            cp target/${{ matrix.target }}/release/crsp ${{ matrix.npm_dir }}/bin/crsp-bin
+            chmod +x ${{ matrix.npm_dir }}/bin/crsp-bin
+          fi
       - name: Create Unix archive
         if: matrix.archive == 'tar.gz'
         run: tar -czf dist/crsp-${{ matrix.target }}.tar.gz -C dist crsp-${{ matrix.target }}
@@ -69,7 +87,12 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm --version
-      - run: npm stage publish
+      - name: Stage npm packages
+        run: |
+          npm stage publish
+          for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
+            npm --prefix "$dir" stage publish
+          done
 
   publish:
     needs: build
