@@ -127,7 +127,7 @@ jobs:
           for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64 npm/win32-x64; do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
-            if [ -f .first-published ] && grep -qx "$name@$version" .first-published; then
+            if [ -f .first-published ] && grep -Fxq "$name@$version" .first-published; then
               echo "skip stage publish for $name@$version (published normally just before)"
             else
               npm --prefix "$dir" stage publish
