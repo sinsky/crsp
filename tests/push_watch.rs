@@ -49,7 +49,11 @@ async fn watcher_filter_rejects_ignored_src_dir_events() {
     let stop = google_clasp_rs::commands::push::watch_files_filtered(
         &content,
         Duration::from_millis(40),
-        move |path| path.file_name().and_then(|name| name.to_str()) != Some("ignored.js"),
+        // Reject the ignored file and directory-level events alike; FSEvents
+        // reports parent-directory events whose name is not `ignored.js`.
+        move |path| {
+            path.is_file() && path.file_name().and_then(|name| name.to_str()) != Some("ignored.js")
+        },
         move |_| {
             let received = Arc::clone(&received);
             Box::pin(async move {

@@ -281,6 +281,7 @@ async fn run_binary(
     command
         .args(&args)
         .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("TZ", "UTC")
         .env("CRSP_API_BASE_URL", server.uri())
         .env("CRSP_SCRIPT_BASE_URL", server.uri())
@@ -329,6 +330,7 @@ async fn run_mcp(
         .arg("start-mcp-server")
         .current_dir(project_dir)
         .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("TZ", "UTC")
         .env("CRSP_API_BASE_URL", server.uri())
         .env("CRSP_SCRIPT_BASE_URL", server.uri())

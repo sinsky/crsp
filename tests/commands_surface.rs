@@ -34,12 +34,14 @@ fn binary() -> Command {
 
 /// Runs the binary with an isolated `HOME` so credential-touching commands
 /// (`logout`, `show-authorized-user`) cannot race on shared state and never
-/// mutate the developer's real credentials.
+/// mutate the developer's real credentials. `USERPROFILE` is set too because
+/// `home::home_dir()` reads it (not `HOME`) on Windows.
 fn run_binary(name: &str, args: &[&str], home: &Path) -> std::process::Output {
     binary()
         .arg(name)
         .args(args)
         .env("HOME", home)
+        .env("USERPROFILE", home)
         .output()
         .unwrap()
 }
@@ -310,6 +312,7 @@ async fn show_authorized_user_human_output_matches_clasp_and_honors_base_url_ove
         .arg("show-authorized-user")
         .current_dir(directory.path())
         .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("CRSP_USERINFO_BASE_URL", server.uri())
         .output()
         .unwrap();
@@ -348,6 +351,7 @@ async fn api_commands_fail_locally_without_credentials_like_clasp() {
         .arg("push")
         .current_dir(directory.path())
         .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("CRSP_API_BASE_URL", server.uri())
         .output()
         .unwrap();
