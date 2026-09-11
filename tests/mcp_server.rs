@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer as WireMockServer, ResponseTemplate};
 
+/// MCP `files`/`Updated file:` paths are `/`-normalized (spec §8); tests build
+/// the expected value from a native temp path, so normalize it too.
+fn forward_slashes(path: PathBuf) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[derive(Default)]
 struct TestClient;
 
@@ -378,12 +384,15 @@ async fn push_and_pull_return_exact_success_shapes_without_status() {
     );
     assert_eq!(
         text(&push, 1),
-        format!("Updated file: {}", project.path().join("Code.js").display())
+        format!(
+            "Updated file: {}",
+            forward_slashes(project.path().join("Code.js"))
+        )
     );
     assert_eq!(
         push.structured_content,
         Some(
-            json!({"scriptId":"script-1","projectDir":project.path(),"files":[project.path().join("Code.js")]})
+            json!({"scriptId":"script-1","projectDir":project.path(),"files":[forward_slashes(project.path().join("Code.js"))]})
         )
     );
     assert!(
@@ -403,12 +412,15 @@ async fn push_and_pull_return_exact_success_shapes_without_status() {
     );
     assert_eq!(
         text(&pull, 1),
-        format!("Updated file: {}", project.path().join("Code.js").display())
+        format!(
+            "Updated file: {}",
+            forward_slashes(project.path().join("Code.js"))
+        )
     );
     assert_eq!(
         pull.structured_content,
         Some(
-            json!({"scriptId":"script-1","projectDir":project.path(),"files":[project.path().join("Code.js")]})
+            json!({"scriptId":"script-1","projectDir":project.path(),"files":[forward_slashes(project.path().join("Code.js"))]})
         )
     );
     server.cancel().await.unwrap();
@@ -457,20 +469,14 @@ async fn structured_content_echoes_raw_project_dir() {
     let structured = push.structured_content.as_ref().unwrap();
     assert_eq!(structured["projectDir"], json!(relative));
     let files: Vec<String> = serde_json::from_value(structured["files"].clone()).unwrap();
-    assert_eq!(
-        files,
-        vec![
-            project
-                .path()
-                .join("Code.js")
-                .to_string_lossy()
-                .into_owned()
-        ]
-    );
+    assert_eq!(files, vec![forward_slashes(project.path().join("Code.js"))]);
     assert!(files.iter().all(|file| Path::new(file).is_absolute()));
     assert_eq!(
         text(&push, 1),
-        format!("Updated file: {}", project.path().join("Code.js").display())
+        format!(
+            "Updated file: {}",
+            forward_slashes(project.path().join("Code.js"))
+        )
     );
     server.cancel().await.unwrap();
 }

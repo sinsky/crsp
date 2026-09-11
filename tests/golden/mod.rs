@@ -287,11 +287,15 @@ pub fn normalize(
     // partially replaced by the home prefix.
     let project_escaped = project_dir.replace('\\', "\\\\");
     let home_escaped = home_dir.replace('\\', "\\\\");
+    let project_forward = project_dir.replace('\\', "/");
+    let home_forward = home_dir.replace('\\', "/");
     let mut replacements: Vec<(&str, &str)> = vec![
         (project_dir, TMP_TOKEN),
         (home_dir, TMP_TOKEN),
         (&project_escaped, TMP_TOKEN),
         (&home_escaped, TMP_TOKEN),
+        (&project_forward, TMP_TOKEN),
+        (&home_forward, TMP_TOKEN),
     ];
     replacements.sort_by_key(|(pattern, _)| std::cmp::Reverse(pattern.len()));
     for (pattern, token) in replacements {
