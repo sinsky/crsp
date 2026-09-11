@@ -443,6 +443,7 @@ async fn clone_root_dir_override_writes_files_and_config() {
     assert_eq!(settings["rootDir"], "src");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn clone_warns_on_skipped_write() {
     let server = MockServer::start().await;
@@ -454,7 +455,6 @@ async fn clone_warns_on_skipped_write() {
         .mount(&server)
         .await;
     let temp = TempDir::new().unwrap();
-    #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/hosts", temp.path().join("Code.js")).unwrap();
     let client = api_client(&server.uri());
     let config = default_config(temp.path()).await;
