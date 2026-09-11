@@ -100,6 +100,7 @@ jobs:
           cp -r npm-artifacts/npm-bin-aarch64-apple-darwin/. npm/darwin-arm64/bin/
           cp -r npm-artifacts/npm-bin-x86_64-apple-darwin/. npm/darwin-x64/bin/
           cp -r npm-artifacts/npm-bin-x86_64-pc-windows-msvc/. npm/win32-x64/bin/
+          chmod +x npm/*/bin/crsp-bin 2>/dev/null || true
           ls -R npm/*/bin
       - uses: actions/setup-node@v4
         with:
