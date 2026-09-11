@@ -14,10 +14,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             archive: tar.gz
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -29,7 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --locked
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Stage dist directory
         shell: bash
         run: |
@@ -37,7 +42,7 @@ jobs:
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp target/release/crsp.exe dist/crsp-${{ matrix.target }}/
           else
-            cp target/release/crsp dist/crsp-${{ matrix.target }}/
+            cp target/${{ matrix.target }}/release/crsp dist/crsp-${{ matrix.target }}/
           fi
           cp LICENSE README.md dist/crsp-${{ matrix.target }}/
       - name: Create Unix archive

@@ -13,14 +13,14 @@ const PLATFORM_MAP = {
     binary: 'crsp-aarch64-apple-darwin/crsp',
   },
   'linux-x64': {
-    target: 'x86_64-unknown-linux-gnu',
-    archive: `crsp-x86_64-unknown-linux-gnu.tar.gz`,
-    binary: 'crsp-x86_64-unknown-linux-gnu/crsp',
+    target: 'x86_64-unknown-linux-musl',
+    archive: `crsp-x86_64-unknown-linux-musl.tar.gz`,
+    binary: 'crsp-x86_64-unknown-linux-musl/crsp',
   },
   'linux-arm64': {
-    target: 'aarch64-unknown-linux-gnu',
-    archive: `crsp-aarch64-unknown-linux-gnu.tar.gz`,
-    binary: 'crsp-aarch64-unknown-linux-gnu/crsp',
+    target: 'aarch64-unknown-linux-musl',
+    archive: `crsp-aarch64-unknown-linux-musl.tar.gz`,
+    binary: 'crsp-aarch64-unknown-linux-musl/crsp',
   },
   'win32-x64': {
     target: 'x86_64-pc-windows-msvc',
