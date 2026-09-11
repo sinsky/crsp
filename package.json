@@ -1,0 +1,40 @@
+{
+  "name": "@sinsky-gh/crsp",
+  "version": "0.1.0",
+  "description": "crsp - The Apps Script CLI (Rust port of google/clasp)",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "crsp": "bin/crsp.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sinsky/crsp.git"
+  },
+  "keywords": [
+    "google-apps-script",
+    "apps-script",
+    "clasp",
+    "crsp",
+    "cli"
+  ],
+  "author": "sinsky",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/sinsky/crsp/issues"
+  },
+  "homepage": "https://github.com/sinsky/crsp#readme"
+}
