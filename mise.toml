@@ -12,30 +12,30 @@ run = "cargo fmt --check"
 
 [tasks.lint]
 description = "Run clippy with warnings as errors"
-run = "cargo clippy --all-targets -- -D warnings"
+run = "cargo clippy --locked --all-targets -- -D warnings"
 
 [tasks.test]
 description = "Run tests with cargo-nextest"
-run = "cargo nextest run"
+run = "cargo nextest run --locked"
 
 [tasks."test:doc"]
 description = "Run documentation tests"
-run = "cargo test --doc"
+run = "cargo test --locked --doc"
 
 [tasks.build]
 description = "Build the project (debug)"
-run = "cargo build"
+run = "cargo build --locked"
 
 [tasks."build:release"]
 description = "Build the project (release)"
-run = "cargo build --release"
+run = "cargo build --release --locked"
 
 [tasks.ci]
 description = "Run the full CI pipeline locally"
 run = [
   "cargo fmt --check",
-  "cargo clippy --all-targets -- -D warnings",
-  "cargo nextest run",
-  "cargo test --doc",
-  "cargo build --release",
+  "cargo clippy --locked --all-targets -- -D warnings",
+  "cargo nextest run --locked",
+  "cargo test --locked --doc",
+  "cargo build --release --locked",
 ]
