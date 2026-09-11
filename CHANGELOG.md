@@ -2,6 +2,18 @@
 
 All notable changes to `crsp` are documented in this file.
 
+## 0.1.1
+
+### Added
+
+- npm distribution via `optionalDependencies` platform packages (`@sinsky-gh/crsp-darwin-arm64`, `-darwin-x64`, `-linux-x64`, `-linux-arm64`, `-win32-x64`).
+- linux-arm64 prebuilt binary and musl static linking for Linux targets.
+- Staged Publishing release workflow with Trusted Publishing (OIDC).
+
+### Removed
+
+- `postinstall` GitHub Releases download (`scripts/install.js`).
+
 ## 0.1.0
 
 ### Added
