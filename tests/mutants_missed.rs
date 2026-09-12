@@ -343,6 +343,7 @@ async fn discover_missing_explicit_path_reports_invalid_path() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn discover_non_notfound_io_error_is_not_invalid_path() {
     // A permission-denied metadata failure must surface as an IO error, not
@@ -394,10 +395,16 @@ async fn load_relative_config_file_resolves_root_at_cwd() {
         .await
         .unwrap();
     std::env::set_current_dir(&previous).unwrap();
-    assert_eq!(
-        config.project_root_dir,
-        root.canonicalize().unwrap_or(root.clone())
-    );
+    // Verbatim (`\\?\`) prefixes and 8.3 short names differ per platform;
+    // compare both sides through the same canonicalization.
+    let normalize = |path: &Path| {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_lowercase()
+    };
+    assert_eq!(normalize(&config.project_root_dir), normalize(&root));
     drop(dir);
 }
 
