@@ -91,6 +91,7 @@ struct TestPrompt {
     input_answer: String,
     select_answer: String,
     select_calls: RefCell<Vec<PromptSelect>>,
+    spinner_calls: RefCell<Vec<String>>,
 }
 
 impl TestPrompt {
@@ -122,7 +123,8 @@ impl PromptAdapter for TestPrompt {
     fn dialog(&self, _: &PromptDialog) -> io::Result<String> {
         Ok(String::new())
     }
-    fn spinner<T, F: FnOnce() -> T>(&self, _: PromptSpinner, f: F) -> io::Result<T> {
+    fn spinner<T, F: FnOnce() -> T>(&self, spec: PromptSpinner, f: F) -> io::Result<T> {
+        self.spinner_calls.borrow_mut().push(spec.message);
         Ok(f())
     }
 }
@@ -2059,6 +2061,47 @@ async fn open_web_app_sorts_choices_by_update_time_ascending() {
     assert_eq!(
         *opener.opened.borrow(),
         vec!["https://script.google.com/macros/s/AKfy/exec".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn open_web_app_interactive_selection_shows_fetching_spinner() {
+    let server = MockServer::start().await;
+    mount_deployments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/deployments/dep-early"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({
+                "entryPoints": [{"entryPointType": "WEB_APP", "webApp": {"url": "https://script.google.com/macros/s/AKfy/exec"}}]
+            })),
+        )
+        .mount(&server)
+        .await;
+    let client = api_client(&server.uri());
+    let temp = TempDir::new().unwrap();
+    let config = gcp_config(temp.path(), "proj");
+    let mut prompt = TestPrompt::interactive();
+    prompt.select_answer = "dep-early".to_string();
+    let mut out = Vec::new();
+    let mut output = Output::new(false, &mut out, Vec::new());
+    let ui = Ui::new(prompt);
+    google_clasp_rs::commands::open_web_app::open_web_app(
+        &client,
+        &config,
+        google_clasp_rs::commands::open_web_app::OpenWebAppArgs {
+            deployment_id: None,
+        },
+        false,
+        &ui,
+        &RecordingOpener::default(),
+        &mut output,
+    )
+    .await
+    .unwrap();
+    let prompt = ui.into_adapter();
+    assert_eq!(
+        prompt.spinner_calls.borrow().clone(),
+        vec!["Fetching deployments...".to_string()]
     );
 }
 

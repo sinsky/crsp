@@ -64,6 +64,19 @@ impl<W: Write, E: Write> Output<W, E> {
     }
 }
 
+pub mod progress {
+    use std::io::{self, Write};
+
+    pub fn render_pull_progress(completed: usize, total: usize) -> String {
+        format!("Pulling files... {completed}/{total}")
+    }
+
+    pub fn report_pull_progress(completed: usize, total: usize) {
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(stderr, "{}", render_pull_progress(completed, total));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};

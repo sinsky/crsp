@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::core::config::ProjectConfig;
 use crate::core::files::{
-    LocalExtensions, PullResult, SkipReason, collect_local_files, pull_files,
+    LocalExtensions, PullResult, SkipReason, collect_local_files, pull_files_with_progress,
 };
 use crate::core::project::RemoteFile;
 use crate::error::CrspError;
@@ -48,14 +48,20 @@ pub async fn pull<A: PromptAdapter>(
     }
     let pull_inputs_ref: &[crate::core::files::PullFile] = &pull_inputs;
     let extensions_ref: &crate::core::files::LocalExtensions = &extensions;
+    let show_progress = !output.is_json() && ui.is_interactive();
+    let progress = show_progress.then_some(crate::output::progress::report_pull_progress);
+    let progress_ref = progress
+        .as_ref()
+        .map(|callback| callback as &(dyn Fn(usize, usize) + Send + Sync));
     let mut result = ui
         .with_async_spinner(crate::i18n::PULLING_FILES, async move {
-            pull_files(
+            pull_files_with_progress(
                 pull_inputs_ref,
                 &config.content_dir,
                 config.allow_symlinks,
                 32,
                 extensions_ref,
+                progress_ref,
             )
             .await
         })

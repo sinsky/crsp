@@ -22,7 +22,7 @@ use crate::error::CrspError;
 use crate::i18n;
 use crate::output::Output;
 use crate::text::humanize_title;
-use crate::ui::{PromptAdapter, Ui};
+use crate::ui::{PromptAdapter, PromptInput, PromptSelect, Ui};
 
 /// Standalone script types; `webapp`/`api` are aliases of `standalone`
 /// because deployment happens via create-deployment (clasp
@@ -78,6 +78,78 @@ struct CreateJson<'a> {
     #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     parent_id: Option<&'a str>,
     files: &'a [String],
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedCreatePrompts {
+    pub script_type: String,
+    pub title: Option<String>,
+    pub parent_id: Option<String>,
+    pub root_dir: Option<String>,
+}
+
+pub fn resolve_create_prompts<A: PromptAdapter>(
+    ui: &Ui<A>,
+    script_type: &str,
+    title: Option<&str>,
+    parent_id: Option<&str>,
+    root_dir: Option<&str>,
+    cwd: &Path,
+    type_is_default: bool,
+) -> Result<Option<ResolvedCreatePrompts>, CrspError> {
+    if !ui.is_interactive()
+        || !type_is_default
+        || title.is_some()
+        || parent_id.is_some()
+        || root_dir.is_some()
+    {
+        return Ok(None);
+    }
+    let script_type = ui.select(PromptSelect {
+        prompt: "Which script type?".to_string(),
+        options: [
+            "standalone",
+            "webapp",
+            "api",
+            "docs",
+            "forms",
+            "sheets",
+            "slides",
+        ]
+        .into_iter()
+        .map(|value| (value.to_string(), value.to_string()))
+        .collect(),
+        default: Some(script_type.to_string()),
+    })?;
+    let title = ui.input(PromptInput {
+        prompt: "Give a project title:".to_string(),
+        placeholder: None,
+        default: Some(default_project_name(cwd)),
+    })?;
+    let parent_id = ui.input(PromptInput {
+        prompt: "Give a parent ID (optional):".to_string(),
+        placeholder: None,
+        default: Some(String::new()),
+    })?;
+    let root_dir = ui.input(PromptInput {
+        prompt: "Give a root directory (optional):".to_string(),
+        placeholder: None,
+        default: Some(String::new()),
+    })?;
+    Ok(Some(ResolvedCreatePrompts {
+        script_type,
+        title: Some(title),
+        parent_id: if parent_id.is_empty() {
+            None
+        } else {
+            Some(parent_id)
+        },
+        root_dir: if root_dir.is_empty() {
+            None
+        } else {
+            Some(root_dir)
+        },
+    }))
 }
 
 /// clasp `getDefaultProjectName`: humanize the cwd folder name.

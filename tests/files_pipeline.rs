@@ -8,6 +8,7 @@ use google_clasp_rs::core::config::ProjectConfig;
 use google_clasp_rs::core::files::{
     LocalExtensions, LocalFile, PullFile, PullFileFailure, SkipReason, WriteFault,
     collect_local_files, get_changed_files, pull_file, pull_file_with_fault, pull_files,
+    pull_files_with_progress,
 };
 use google_clasp_rs::output::Output;
 use google_clasp_rs::ui::{
@@ -1311,6 +1312,39 @@ async fn pull_warns_on_write_skips_like_clasp() {
         "└─ src/nested/Code.js\nPulled one file.\n"
     );
     assert!(!outside.join("Code.js").exists());
+}
+
+#[tokio::test]
+async fn pull_files_reports_completed_count_progress() {
+    use std::sync::Mutex;
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    let inputs = vec![
+        PullFile::new("Code", "SERVER_JS", "one"),
+        PullFile::new("Other", "SERVER_JS", "two"),
+        PullFile::new("Page", "HTML", "<p>hi</p>"),
+    ];
+    let seen = Mutex::new(Vec::new());
+    pull_files_with_progress(
+        &inputs,
+        &src,
+        false,
+        32,
+        &LocalExtensions::clasp_defaults(),
+        Some(&|completed: usize, total: usize| {
+            seen.lock().unwrap().push((completed, total));
+        }),
+    )
+    .await
+    .unwrap();
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), inputs.len());
+    assert!(seen.contains(&(inputs.len(), inputs.len())));
+    for (completed, total) in seen {
+        assert_eq!(total, inputs.len());
+        assert!((1..=inputs.len()).contains(&completed));
+    }
 }
 
 #[test]

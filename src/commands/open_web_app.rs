@@ -40,7 +40,11 @@ pub async fn open_web_app<A: PromptAdapter, O: UrlOpener>(
 
     let mut deployment_id = args.deployment_id.map(str::to_string);
     if deployment_id.is_none() && ui.is_interactive() {
-        let mut deployments = client.script().list_deployments(script_id).await?.results;
+        let mut deployments = ui
+            .with_async_spinner(i18n::FETCHING_DEPLOYMENTS, async move {
+                Ok::<_, CrspError>(client.script().list_deployments(script_id).await?.results)
+            })
+            .await??;
         // Order deployments by update time (clasp sorts with localeCompare
         // when both keys exist; the stable sort keeps the rest in place).
         deployments.sort_by(
