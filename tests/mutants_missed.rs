@@ -438,6 +438,7 @@ async fn load_rejects_escaping_content_dir() {
     drop(dir);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn load_rejects_symlink_escape_when_canonicalize_succeeds() {
     // Both paths canonicalize here (dir + content exist); a symlink content
@@ -459,6 +460,29 @@ async fn load_rejects_symlink_escape_when_canonicalize_succeeds() {
     let error = ProjectConfig::load(&root.join(PROJECT_CONFIG_FILENAME))
         .await
         .unwrap_err();
+    assert!(matches!(error, CrspError::Config(_)), "{error:?}");
+    drop(dir);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn load_rejects_absolute_outside_dir_when_canonicalize_succeeds() {
+    // Windows counterpart of the symlink-escape test above: both paths
+    // canonicalize (dir + content exist) and the (Ok, Ok) arm rejects the
+    // outside content dir. Deleting that arm (`_ => true`) would accept it.
+    let (dir, root) = temp_root();
+    let outside = root.parent().unwrap().join("crsp-mutants-outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let escaped = outside.to_string_lossy().replace('\\', "\\\\");
+    write_file(
+        &root.join(PROJECT_CONFIG_FILENAME),
+        &format!(r#"{{ "scriptId": "s", "rootDir": "{escaped}" }}"#),
+    )
+    .await;
+    let error = ProjectConfig::load(&root.join(PROJECT_CONFIG_FILENAME))
+        .await
+        .unwrap_err();
+    std::fs::remove_dir_all(&outside).ok();
     assert!(matches!(error, CrspError::Config(_)), "{error:?}");
     drop(dir);
 }
