@@ -26,6 +26,7 @@ fn parse_canonical(name: &str) -> Cli {
         "update-deployment" | "redeploy" | "enable-api" | "disable-api" => {
             parse(&[name, "placeholder"])
         }
+        "completion" => parse(&[name, "bash"]),
         _ => parse(&[name]),
     }
 }
@@ -61,6 +62,7 @@ fn dispatch_tag(command: &Commands) -> &'static str {
         Commands::OpenApiConsole => "open-api-console",
         Commands::OpenCredentialsSetup => "open-credentials-setup",
         Commands::StartMcpServer => "start-mcp-server",
+        Commands::Completion(_) => "completion",
         Commands::External(_) => "external",
     }
 }
@@ -95,6 +97,7 @@ const CANONICAL_COMMANDS: &[(&str, &str)] = &[
     ("open-api-console", "open-api-console"),
     ("open-credentials-setup", "open-credentials-setup"),
     ("start-mcp-server", "start-mcp-server"),
+    ("completion", "completion"),
 ];
 
 const ALIASES: &[(&str, &str)] = &[
@@ -140,6 +143,43 @@ fn short_version_flag_reports_crate_version_with_exit_zero() {
 }
 
 #[test]
+fn completion_generates_scripts_for_supported_shells_without_initializing_runtime() {
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        let assertion = crsp_bin().args(["completion", shell]).assert().success();
+        let output = assertion.get_output();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.is_empty(), "completion output for {shell} is empty");
+        assert!(
+            stdout.contains("crsp"),
+            "completion output for {shell}: {stdout}"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "stderr for {shell}: {:?}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
+fn completion_does_not_initialize_the_tokio_runtime() {
+    let before = google_clasp_rs::runtime_count();
+    let cli = parse(&["completion", "bash"]);
+    google_clasp_rs::run(&cli).expect("completion succeeds");
+    assert_eq!(google_clasp_rs::runtime_count(), before);
+}
+
+#[test]
+fn unsupported_completion_shell_exits_one_without_initializing_runtime() {
+    crsp_bin()
+        .args(["completion", "ksh"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("invalid value 'ksh'"));
+}
+
+#[test]
 fn help_flag_prints_usage_and_exits_zero() {
     let assertion = crsp_bin().arg("--help").assert().success();
     let output = assertion.get_output();
@@ -152,6 +192,7 @@ fn help_flag_prints_usage_and_exits_zero() {
     assert!(stdout.contains("-v, --version"), "{stdout}");
     assert!(stdout.contains("login"), "{stdout}");
     assert!(stdout.contains("start-mcp-server"), "{stdout}");
+    assert!(stdout.contains("completion"), "{stdout}");
 }
 
 #[test]
