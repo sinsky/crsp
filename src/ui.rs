@@ -77,6 +77,21 @@ pub trait PromptAdapter {
         T: Send;
 }
 
+/// Builds the `demand` selector for `spec`, marking the default value as
+/// the initially selected option so the interactive cursor starts there.
+fn build_select(spec: &PromptSelect) -> demand::Select<'static, String> {
+    let mut select = demand::Select::new(spec.prompt.clone());
+    for (value, label) in &spec.options {
+        let selected = spec.default.as_deref() == Some(value.as_str());
+        select = select.option(
+            demand::DemandOption::new(value.clone())
+                .label(label)
+                .selected(selected),
+        );
+    }
+    select
+}
+
 /// The production adapter wrapping `demand`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DemandAdapter;
@@ -98,11 +113,7 @@ impl PromptAdapter for DemandAdapter {
     }
 
     fn select(&self, spec: &PromptSelect) -> io::Result<String> {
-        let mut select = demand::Select::new(spec.prompt.clone());
-        for (value, label) in &spec.options {
-            select = select.option(demand::DemandOption::new(value.clone()).label(label));
-        }
-        select.run()
+        build_select(spec).run()
     }
 
     fn multi_select(&self, spec: &PromptMultiSelect) -> io::Result<Vec<String>> {
@@ -334,4 +345,47 @@ where
             Err(_) => unreachable!(),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_marks_the_default_option_as_selected() {
+        let spec = PromptSelect {
+            prompt: "Choose:".to_string(),
+            options: vec![
+                ("id-1".to_string(), "One".to_string()),
+                ("id-2".to_string(), "Two".to_string()),
+            ],
+            default: Some("id-2".to_string()),
+        };
+        let select = build_select(&spec);
+        let selected: Vec<bool> = select
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect();
+        assert_eq!(selected, vec![false, true]);
+    }
+
+    #[test]
+    fn select_without_default_selects_nothing() {
+        let spec = PromptSelect {
+            prompt: "Choose:".to_string(),
+            options: vec![
+                ("id-1".to_string(), "One".to_string()),
+                ("id-2".to_string(), "Two".to_string()),
+            ],
+            default: None,
+        };
+        let select = build_select(&spec);
+        let selected: Vec<bool> = select
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect();
+        assert_eq!(selected, vec![false, false]);
+    }
 }
