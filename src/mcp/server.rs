@@ -151,10 +151,12 @@ impl McpServer {
     /// clasp `start-mcp.ts`: the MCP server reuses the preAction-initialized
     /// clasp instance, so its tool API calls carry the user's OAuth2 client
     /// (bearer token + 401 refresh), exactly like the CLI commands.
-    pub fn with_context(context: &crate::core::clasp::Clasp) -> Self {
-        Self {
-            client: context.client.clone(),
-        }
+    pub fn with_context(
+        context: &crate::core::clasp::Clasp,
+    ) -> Result<Self, crate::error::CrspError> {
+        Ok(Self {
+            client: context.client()?.clone(),
+        })
     }
 
     fn client(&self) -> ApiClient {
@@ -485,7 +487,7 @@ pub async fn start_server(
     // clasp start-mcp.ts: the MCP server shares the preAction-initialized
     // auth context (user credentials from `$HOME`), so tool API calls carry
     // the user's bearer token and 401-refresh exactly like the CLI commands.
-    let service = McpServer::with_context(context).serve(stdio()).await?;
+    let service = McpServer::with_context(context)?.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
