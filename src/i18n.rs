@@ -505,8 +505,11 @@ pub const PUSHING_FILES: &str = "Pushing files...";
 /// does not show it either).
 pub const CHECKING_LOCAL_FILES: &str = "Checking local files...";
 
-/// `Pulling files...` (clasp pull.ts:69 spinner message).
+/// `Pulling files...` (crsp pull progress line prefix).
 pub const PULLING_FILES: &str = "Pulling files...";
+
+/// `Fetching script content...` (crsp pull fetch spinner message).
+pub const FETCHING_SCRIPT_CONTENT: &str = "Fetching script content...";
 
 /// `Cloning script...` (clasp clone-script.ts:87, create-script.ts:163
 /// spinner message).
