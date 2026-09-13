@@ -592,11 +592,33 @@ pub async fn pull_files(
     max_writes: usize,
     extensions: &LocalExtensions,
 ) -> Result<PullResult, CrspError> {
+    pull_files_with_progress(
+        files,
+        content_dir,
+        allow_symlinks,
+        max_writes,
+        extensions,
+        None,
+    )
+    .await
+}
+
+pub async fn pull_files_with_progress(
+    files: &[PullFile],
+    content_dir: &Path,
+    allow_symlinks: bool,
+    max_writes: usize,
+    extensions: &LocalExtensions,
+    progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
+) -> Result<PullResult, CrspError> {
     let semaphore = std::sync::Arc::new(Semaphore::new(max_writes.clamp(1, 32)));
+    let total = files.len();
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let results = stream::iter(files.iter().cloned().enumerate().map(|(index, file)| {
         let semaphore = std::sync::Arc::clone(&semaphore);
         let content_dir = content_dir.to_path_buf();
         let extensions = extensions.clone();
+        let completed = std::sync::Arc::clone(&completed);
         async move {
             let _permit = semaphore
                 .acquire_owned()
@@ -618,6 +640,10 @@ pub async fn pull_files(
             })
             .await
             .map_err(|error| CrspError::Io(std::io::Error::other(error.to_string())))??;
+            if let Some(progress) = progress {
+                let done = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                progress(done, total);
+            }
             Ok::<_, CrspError>((index, outcome))
         }
     }))

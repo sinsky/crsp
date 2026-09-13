@@ -1,16 +1,57 @@
 use std::fs;
 use std::path::Path;
 
+use crate::api::ApiClient;
 use crate::core::config::ProjectConfig;
 use crate::core::files::{
-    LocalExtensions, PullResult, SkipReason, collect_local_files, pull_files,
+    LocalExtensions, PullResult, SkipReason, collect_local_files, pull_files_with_progress,
 };
-use crate::core::project::RemoteFile;
+use crate::core::project::{RemoteFile, assert_script_configured, fetch_remote_files};
 use crate::error::CrspError;
 use crate::output::Output;
 use crate::ui::{PromptAdapter, PromptConfirm, Ui};
 
+pub struct PullArgs<'a> {
+    pub version_number: Option<&'a str>,
+    pub delete_unused: bool,
+    pub force: bool,
+}
+
 pub async fn pull<A: PromptAdapter>(
+    client: &ApiClient,
+    config: &ProjectConfig,
+    cwd: &Path,
+    args: PullArgs<'_>,
+    ui: &Ui<A>,
+    output: &mut Output<impl std::io::Write, impl std::io::Write>,
+) -> Result<PullResult, CrspError> {
+    let version_number = args
+        .version_number
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|_| CrspError::Validation(format!("'{value}' is not a valid integer.")))
+        })
+        .transpose()?;
+    let script_id = assert_script_configured(config).await?.to_string();
+    let remote = ui
+        .with_async_spinner(crate::i18n::FETCHING_SCRIPT_CONTENT, async move {
+            fetch_remote_files(client, &script_id, config, cwd, version_number).await
+        })
+        .await??;
+    pull_with_remote_files(
+        config,
+        cwd,
+        &remote,
+        args.delete_unused,
+        args.force,
+        ui,
+        output,
+    )
+    .await
+}
+
+pub async fn pull_with_remote_files<A: PromptAdapter>(
     config: &ProjectConfig,
     cwd: &Path,
     remote: &[RemoteFile],
@@ -27,11 +68,8 @@ pub async fn pull<A: PromptAdapter>(
     let extensions = LocalExtensions::from_config(config);
     let pull_inputs: Vec<crate::core::files::PullFile> =
         remote.iter().map(|entry| entry.file.clone()).collect();
-    // clasp pull.ts:45-66: locals are collected before the pull (the list
-    // also feeds the --deleteUnusedFiles comparison). clasp assigns a
-    // `Checking local files...` message here but never passes it to
-    // `withSpinner` — the local collect is a plain await; only the remote
-    // pull carries the spinner.
+    // Local collection is a plain await; only the remote fetch carries the
+    // spinner, while the write phase reports `Pulling files... N/T` progress.
     let collected = collect_local_files(config).await?;
     if !output.is_json() {
         for item in &collected.skipped {
@@ -46,20 +84,20 @@ pub async fn pull<A: PromptAdapter>(
             }
         }
     }
-    let pull_inputs_ref: &[crate::core::files::PullFile] = &pull_inputs;
-    let extensions_ref: &crate::core::files::LocalExtensions = &extensions;
-    let mut result = ui
-        .with_async_spinner(crate::i18n::PULLING_FILES, async move {
-            pull_files(
-                pull_inputs_ref,
-                &config.content_dir,
-                config.allow_symlinks,
-                32,
-                extensions_ref,
-            )
-            .await
-        })
-        .await??;
+    let show_progress = !output.is_json() && ui.is_interactive();
+    let progress = show_progress.then_some(crate::output::progress::report_pull_progress);
+    let progress_ref = progress
+        .as_ref()
+        .map(|callback| callback as &(dyn Fn(usize, usize) + Send + Sync));
+    let mut result = pull_files_with_progress(
+        &pull_inputs,
+        &config.content_dir,
+        config.allow_symlinks,
+        32,
+        &extensions,
+        progress_ref,
+    )
+    .await?;
     // clasp pull.ts:75-91: every write skip warns with the clasp reason text
     // (human mode only).
     if !output.is_json() {

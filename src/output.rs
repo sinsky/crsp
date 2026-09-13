@@ -64,6 +64,26 @@ impl<W: Write, E: Write> Output<W, E> {
     }
 }
 
+pub mod progress {
+    use std::io::{self, IsTerminal, Write};
+
+    pub fn render_pull_progress(completed: usize, total: usize) -> String {
+        format!("Pulling files... {completed}/{total}")
+    }
+
+    pub fn report_pull_progress(completed: usize, total: usize) {
+        if !io::stderr().is_terminal() {
+            return;
+        }
+        let mut stderr = io::stderr().lock();
+        let _ = write!(stderr, "\r{}", render_pull_progress(completed, total));
+        if completed == total {
+            let _ = write!(stderr, "\r\x1b[2K");
+        }
+        let _ = stderr.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
@@ -133,6 +153,14 @@ mod tests {
         let mut output = Output::new(false, FailingWriter, FailingWriter);
         output.message("ignored");
         output.warn("ignored");
+    }
+
+    #[test]
+    fn render_pull_progress_counts_completed_of_total() {
+        assert_eq!(
+            super::progress::render_pull_progress(3, 12),
+            "Pulling files... 3/12"
+        );
     }
 
     #[test]
