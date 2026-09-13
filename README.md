@@ -71,6 +71,23 @@ crsp pull
 - `open-api-console` — Open the API console for the current project
 - `open-credentials-setup` — Open the credentials page for the script's GCP project
 - `start-mcp-server` — Start an MCP server for Apps Script
+- `completion` `<shell>` — Generate a shell completion script (`bash`, `zsh`, `fish`, `powershell`)
+
+## Shell completion
+
+```sh
+# bash
+crsp completion bash > ~/.bash_completion.d/crsp
+
+# zsh
+crsp completion zsh > "${fpath[1]}/_crsp"
+
+# fish
+crsp completion fish > ~/.config/fish/completions/crsp.fish
+
+# powershell
+crsp completion powershell | Out-String | Invoke-Expression
+```
 
 ## Global options
 
