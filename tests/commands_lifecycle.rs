@@ -54,16 +54,23 @@ fn api_client(base: &str) -> ApiClient {
 #[derive(Default)]
 struct TestPrompt {
     interactive: bool,
-    input_answer: String,
+    input_answers: RefCell<Vec<String>>,
     select_answer: String,
     confirm_answer: bool,
     select_calls: RefCell<Vec<PromptSelect>>,
+    input_calls: RefCell<Vec<PromptInput>>,
 }
 
 impl TestPrompt {
     fn interactive() -> Self {
         Self {
             interactive: true,
+            input_answers: RefCell::new(vec![
+                "src".to_string(),
+                "parent-1".to_string(),
+                "Prompted title".to_string(),
+            ]),
+            select_answer: "sheets".to_string(),
             ..Self::default()
         }
     }
@@ -73,8 +80,9 @@ impl PromptAdapter for TestPrompt {
     fn is_interactive(&self) -> bool {
         self.interactive
     }
-    fn input(&self, _: &PromptInput) -> io::Result<String> {
-        Ok(self.input_answer.clone())
+    fn input(&self, spec: &PromptInput) -> io::Result<String> {
+        self.input_calls.borrow_mut().push(spec.clone());
+        Ok(self.input_answers.borrow_mut().pop().unwrap_or_default())
     }
     fn select(&self, spec: &PromptSelect) -> io::Result<String> {
         self.select_calls.borrow_mut().push(spec.clone());
@@ -570,6 +578,72 @@ async fn clone_maps_invalid_argument_to_invalid_script_id() {
 // create-script
 // ---------------------------------------------------------------------------
 
+#[tokio::test]
+async fn create_prompts_are_used_only_when_all_arguments_are_missing() {
+    use google_clasp_rs::commands::create_script::resolve_create_prompts;
+    let temp = TempDir::new().unwrap();
+    let interactive = Ui::new(TestPrompt::interactive());
+    let resolved = resolve_create_prompts(
+        &interactive,
+        "standalone",
+        None,
+        None,
+        None,
+        temp.path(),
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(resolved.script_type, "sheets");
+    assert_eq!(resolved.title.as_deref(), Some("Prompted title"));
+    assert_eq!(resolved.parent_id.as_deref(), Some("parent-1"));
+    assert_eq!(resolved.root_dir.as_deref(), Some("src"));
+    let adapter = interactive.into_adapter();
+    assert_eq!(adapter.select_calls.borrow().len(), 1);
+    let non_interactive = Ui::new(TestPrompt::default());
+    assert!(
+        resolve_create_prompts(
+            &non_interactive,
+            "standalone",
+            None,
+            None,
+            None,
+            temp.path(),
+            true
+        )
+        .unwrap()
+        .is_none()
+    );
+    let partially_specified = Ui::new(TestPrompt::interactive());
+    assert!(
+        resolve_create_prompts(
+            &partially_specified,
+            "standalone",
+            Some("Title"),
+            None,
+            None,
+            temp.path(),
+            true,
+        )
+        .unwrap()
+        .is_none()
+    );
+    let non_default_type = Ui::new(TestPrompt::interactive());
+    assert!(
+        resolve_create_prompts(
+            &non_default_type,
+            "docs",
+            None,
+            None,
+            None,
+            temp.path(),
+            false,
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
 async fn mount_create(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/v1/projects"))
@@ -1000,10 +1074,10 @@ async fn create_version_interactive_prompts_for_description() {
     let temp = TempDir::new().unwrap();
     let client = api_client(&server.uri());
     let config = configured_config(temp.path());
-    let mut prompt = TestPrompt::interactive();
+    let prompt = TestPrompt::interactive();
     prompt
-        .input_answer
-        .clone_from(&"typed description".to_string());
+        .input_answers
+        .replace(vec!["typed description".to_string()]);
     let mut out = Vec::new();
     let mut output = Output::new(false, &mut out, Vec::new());
     create_version(&client, &config, None, &Ui::new(prompt), &mut output)

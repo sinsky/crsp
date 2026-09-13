@@ -212,14 +212,38 @@ async fn run_command(
             .await?;
         }
         Commands::CreateScript(args) => {
+            let prompted = crate::commands::create_script::resolve_create_prompts(
+                &ui,
+                &args.script_type,
+                args.title.as_deref(),
+                args.parent_id.as_deref(),
+                args.root_dir.as_deref(),
+                &cwd,
+                args.script_type == "standalone"
+                    && args.title.is_none()
+                    && args.parent_id.is_none()
+                    && args.root_dir.is_none(),
+            )?;
             crate::commands::create_script::create_script(
                 &context.client,
                 &config,
                 crate::commands::create_script::CreateScriptArgs {
-                    script_type: &args.script_type,
-                    title: args.title.as_deref(),
-                    parent_id: args.parent_id.as_deref(),
-                    root_dir: args.root_dir.as_deref(),
+                    script_type: prompted
+                        .as_ref()
+                        .map(|resolved| resolved.script_type.as_str())
+                        .unwrap_or(&args.script_type),
+                    title: prompted
+                        .as_ref()
+                        .and_then(|resolved| resolved.title.as_deref())
+                        .or(args.title.as_deref()),
+                    parent_id: prompted
+                        .as_ref()
+                        .and_then(|resolved| resolved.parent_id.as_deref())
+                        .or(args.parent_id.as_deref()),
+                    root_dir: prompted
+                        .as_ref()
+                        .and_then(|resolved| resolved.root_dir.as_deref())
+                        .or(args.root_dir.as_deref()),
                     cwd: &cwd,
                 },
                 &ui,
@@ -240,28 +264,15 @@ async fn run_command(
             .await?;
         }
         Commands::Pull(args) => {
-            let id = crate::core::project::assert_script_configured(&config).await?;
-            let remote = crate::core::project::fetch_remote_files(
-                &context.client,
-                id,
-                &config,
-                &cwd,
-                args.version_number
-                    .as_deref()
-                    .map(|v| {
-                        v.parse().map_err(|_| {
-                            CrspError::Validation(format!("'{v}' is not a valid integer."))
-                        })
-                    })
-                    .transpose()?,
-            )
-            .await?;
             crate::commands::pull::pull(
+                &context.client,
                 &config,
                 &cwd,
-                &remote,
-                args.delete_unused_files,
-                args.force,
+                crate::commands::pull::PullArgs {
+                    version_number: args.version_number.as_deref(),
+                    delete_unused: args.delete_unused_files,
+                    force: args.force,
+                },
                 &ui,
                 &mut output,
             )
