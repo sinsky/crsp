@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use google_clasp_rs::api::{ApiClient, ApiClientConfig, BaseUrls};
 use google_clasp_rs::commands::show_file_status::show_file_status;
-use google_clasp_rs::commands::{pull::pull as pull_command, push::push as push_command};
+use google_clasp_rs::commands::{
+    pull::pull_with_remote_files as pull_command, push::push as push_command,
+};
 use google_clasp_rs::core::config::ProjectConfig;
 use google_clasp_rs::core::files::{
     LocalExtensions, LocalFile, PullFile, PullFileFailure, SkipReason, WriteFault,

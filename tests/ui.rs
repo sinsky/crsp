@@ -428,25 +428,30 @@ async fn list_versions_shows_the_spinner_message_on_an_interactive_adapter() {
 }
 
 #[tokio::test]
-async fn pull_wraps_only_the_remote_pull_not_the_local_collect() {
-    // §round-1 (finding 1a): clasp pull.ts wraps ONLY the remote pull API call
-    // in a `Pulling files...` spinner; the local collection is a plain await.
-    // The interactive adapter must therefore see exactly one spinner message.
+async fn pull_wraps_only_the_remote_fetch_not_the_local_write() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/projects/script/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "files": [{"name": "Code", "type": "SERVER_JS", "source": "hello"}]
+        })))
+        .mount(&server)
+        .await;
+    let client = api_client(&server.uri());
     let temp = TempDir::new().unwrap();
     let config = configured_config(temp.path());
-    let remote = vec![google_clasp_rs::core::project::RemoteFile {
-        file: google_clasp_rs::core::files::PullFile::new("out.txt", "FILE", "hello"),
-        local_path: "out.txt".to_string(),
-    }];
     let mut out = Vec::new();
     let mut output = google_clasp_rs::output::Output::new(false, &mut out, Vec::new());
     let ui = Ui::new(FakeAdapter::interactive());
     google_clasp_rs::commands::pull::pull(
+        &client,
         &config,
         temp.path(),
-        &remote,
-        false,
-        false,
+        google_clasp_rs::commands::pull::PullArgs {
+            version_number: None,
+            delete_unused: false,
+            force: false,
+        },
         &ui,
         &mut output,
     )
@@ -455,8 +460,8 @@ async fn pull_wraps_only_the_remote_pull_not_the_local_collect() {
     let adapter = ui.into_adapter();
     assert_eq!(
         adapter.spinner_starts.borrow().clone(),
-        vec!["Pulling files...".to_string()],
-        "local collection must not carry a spinner (clasp pull.ts only wraps the remote pull)"
+        vec!["Fetching script content...".to_string()],
+        "only the remote fetch carries a spinner; the local write reports progress instead"
     );
     assert_eq!(adapter.spinner_stops.get(), 1);
 }

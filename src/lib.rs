@@ -264,28 +264,15 @@ async fn run_command(
             .await?;
         }
         Commands::Pull(args) => {
-            let id = crate::core::project::assert_script_configured(&config).await?;
-            let remote = crate::core::project::fetch_remote_files(
-                &context.client,
-                id,
-                &config,
-                &cwd,
-                args.version_number
-                    .as_deref()
-                    .map(|v| {
-                        v.parse().map_err(|_| {
-                            CrspError::Validation(format!("'{v}' is not a valid integer."))
-                        })
-                    })
-                    .transpose()?,
-            )
-            .await?;
             crate::commands::pull::pull(
+                &context.client,
                 &config,
                 &cwd,
-                &remote,
-                args.delete_unused_files,
-                args.force,
+                crate::commands::pull::PullArgs {
+                    version_number: args.version_number.as_deref(),
+                    delete_unused: args.delete_unused_files,
+                    force: args.force,
+                },
                 &ui,
                 &mut output,
             )
