@@ -220,7 +220,8 @@ async fn init_context_wires_stored_expiry_into_pre_send_refresh() {
         .await
         .unwrap();
     context
-        .client
+        .client()
+        .unwrap()
         .script()
         .get_content("script", None)
         .await
