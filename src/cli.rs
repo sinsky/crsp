@@ -8,7 +8,7 @@
 //! while attribute strings are used verbatim — required for clasp-identical
 //! output.
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 use crate::i18n;
 
@@ -265,9 +265,30 @@ pub enum Commands {
     )]
     StartMcpServer,
 
+    #[command(name = "completion", about = "Generate shell completion scripts")]
+    Completion(CompletionArgs),
+
     /// Catch-all for unknown commands so `run` can report them clasp-style.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Args, Debug)]
+pub struct CompletionArgs {
+    #[arg(value_name = "shell", help = "The shell to generate completions for")]
+    pub shell: CompletionShell,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionShell {
+    #[value(name = "bash")]
+    Bash,
+    #[value(name = "zsh")]
+    Zsh,
+    #[value(name = "fish")]
+    Fish,
+    #[value(name = "powershell")]
+    Powershell,
 }
 
 #[derive(Args, Debug)]

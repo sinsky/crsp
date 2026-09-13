@@ -1504,7 +1504,8 @@ async fn refresh_token_only_entry_refreshes_at_first_request_like_clasp() {
     // First API request: exactly one refresh POST, then the call with the
     // fresh bearer (google-auth-library `getRequestMetadataAsync`).
     context
-        .client
+        .client()
+        .expect("client init")
         .script()
         .get_content("script", None)
         .await
@@ -1676,7 +1677,8 @@ async fn expired_token_entry_refreshes_at_first_request_like_clasp() {
     // First API request: exactly one refresh POST, then the call with the
     // fresh bearer (google-auth-library `isTokenExpiring` at request time).
     context
-        .client
+        .client()
+        .expect("client init")
         .script()
         .get_content("script", None)
         .await

@@ -43,6 +43,7 @@ pub fn run(cli: &Cli) -> Result<(), CrspError> {
             program.print_help().map_err(CrspError::Io)?;
             Err(CrspError::Validation(crate::i18n::unknown_command(command)))
         }
+        Some(Commands::Completion(args)) => run_completion(args),
         Some(_) => runtime().block_on(run_async(cli)),
     }
 }
@@ -67,6 +68,40 @@ async fn run_async(cli: &Cli) -> Result<(), CrspError> {
         Some(command) => run_command(cli, command, context).await,
         None => unreachable!(),
     }
+}
+
+fn run_completion(args: &CompletionArgs) -> Result<(), CrspError> {
+    use clap::CommandFactory as _;
+    use clap_complete::{generate, shells};
+    let mut program = Cli::command();
+    let mut stdout = std::io::stdout();
+    match args.shell {
+        CompletionShell::Bash => generate(
+            shells::Bash,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Zsh => generate(
+            shells::Zsh,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Fish => generate(
+            shells::Fish,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Powershell => generate(
+            shells::PowerShell,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+    }
+    Ok(())
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -198,7 +233,7 @@ async fn run_command(
     match command {
         Commands::CloneScript(args) => {
             crate::commands::clone_script::clone_script(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::clone_script::CloneArgs {
                     script_id: args.script_id.as_deref(),
@@ -225,7 +260,7 @@ async fn run_command(
                     && args.root_dir.is_none(),
             )?;
             crate::commands::create_script::create_script(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::create_script::CreateScriptArgs {
                     script_type: prompted
@@ -253,7 +288,7 @@ async fn run_command(
         }
         Commands::Push(args) => {
             crate::commands::push::push(
-                &context.client,
+                context.client()?,
                 &config,
                 &cwd,
                 args.force,
@@ -265,7 +300,7 @@ async fn run_command(
         }
         Commands::Pull(args) => {
             crate::commands::pull::pull(
-                &context.client,
+                context.client()?,
                 &config,
                 &cwd,
                 crate::commands::pull::PullArgs {
@@ -280,7 +315,7 @@ async fn run_command(
         }
         Commands::CreateDeployment(args) => {
             crate::commands::create_deployment::create_deployment(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::create_deployment::CreateDeploymentArgs {
                     version_number: args.version_number.as_deref(),
@@ -294,7 +329,7 @@ async fn run_command(
         }
         Commands::UpdateDeployment(args) => {
             crate::commands::update_deployment::update_deployment(
-                &context.client,
+                context.client()?,
                 &config,
                 args.deployment_id.as_str(),
                 crate::commands::update_deployment::UpdateDeploymentArgs {
@@ -308,7 +343,7 @@ async fn run_command(
         }
         Commands::DeleteDeployment(args) => {
             crate::commands::delete_deployment::delete_deployment(
-                &context.client,
+                context.client()?,
                 &config,
                 args.deployment_id.as_deref(),
                 args.all,
@@ -319,7 +354,7 @@ async fn run_command(
         }
         Commands::DeleteScript(args) => {
             crate::commands::delete_script::delete_script(
-                &context.client,
+                context.client()?,
                 &config,
                 args.script_id.as_deref(),
                 args.force,
@@ -330,7 +365,7 @@ async fn run_command(
         }
         Commands::CreateVersion(args) => {
             crate::commands::create_version::create_version(
-                &context.client,
+                context.client()?,
                 &config,
                 args.description.as_deref(),
                 &ui,
@@ -340,7 +375,7 @@ async fn run_command(
         }
         Commands::ListVersions(args) => {
             crate::commands::list_versions::list_versions(
-                &context.client,
+                context.client()?,
                 &config,
                 args.script_id.as_deref(),
                 &ui,
@@ -350,7 +385,7 @@ async fn run_command(
         }
         Commands::ListDeployments(args) => {
             crate::commands::list_deployments::list_deployments(
-                &context.client,
+                context.client()?,
                 &config,
                 args.script_id.as_deref(),
                 &ui,
@@ -360,7 +395,7 @@ async fn run_command(
         }
         Commands::ListScripts(args) => {
             crate::commands::list_scripts::list_scripts(
-                &context.client,
+                context.client()?,
                 args.no_shorten,
                 &ui,
                 &mut output,
@@ -369,7 +404,7 @@ async fn run_command(
         }
         Commands::RunFunction(args) => {
             crate::commands::run_function::run_function(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::run_function::RunFunctionArgs {
                     function_name: args.function_name.as_deref(),
@@ -383,7 +418,7 @@ async fn run_command(
         }
         Commands::TailLogs(args) => {
             crate::commands::tail_logs::tail_logs(
-                &context.client,
+                context.client()?,
                 &mut config,
                 crate::commands::tail_logs::TailLogsArgs {
                     watch: args.watch,
@@ -405,7 +440,7 @@ async fn run_command(
         }
         Commands::ListApis => {
             crate::commands::list_apis::list_apis(
-                &context.client,
+                context.client()?,
                 &mut config,
                 &ui,
                 &opener,
@@ -415,7 +450,7 @@ async fn run_command(
         }
         Commands::EnableApi(args) => {
             crate::commands::enable_api::enable_api(
-                &context.client,
+                context.client()?,
                 &mut config,
                 &args.api,
                 &ui,
@@ -426,7 +461,7 @@ async fn run_command(
         }
         Commands::DisableApi(args) => {
             crate::commands::disable_api::disable_api(
-                &context.client,
+                context.client()?,
                 &mut config,
                 &args.api,
                 &ui,
@@ -437,7 +472,7 @@ async fn run_command(
         }
         Commands::OpenScript(args) => {
             crate::commands::open_script::open_script(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::open_script::OpenScriptArgs {
                     script_id: args.script_id.as_deref(),
@@ -451,7 +486,7 @@ async fn run_command(
         }
         Commands::OpenContainer => {
             crate::commands::open_container::open_container(
-                &context.client,
+                context.client()?,
                 &config,
                 include_user_hint_in_url(),
                 &ui,
@@ -462,7 +497,7 @@ async fn run_command(
         }
         Commands::OpenWebApp(args) => {
             crate::commands::open_web_app::open_web_app(
-                &context.client,
+                context.client()?,
                 &config,
                 crate::commands::open_web_app::OpenWebAppArgs {
                     deployment_id: args.deployment_id.as_deref(),
@@ -476,7 +511,7 @@ async fn run_command(
         }
         Commands::OpenLogs => {
             crate::commands::open_logs::open_logs(
-                &context.client,
+                context.client()?,
                 &mut config,
                 include_user_hint_in_url(),
                 &ui,
@@ -487,7 +522,7 @@ async fn run_command(
         }
         Commands::OpenApiConsole => {
             crate::commands::open_api_console::open_api_console(
-                &context.client,
+                context.client()?,
                 &mut config,
                 include_user_hint_in_url(),
                 &ui,
@@ -498,7 +533,7 @@ async fn run_command(
         }
         Commands::OpenCredentialsSetup => {
             crate::commands::open_credentials_setup::open_credentials_setup(
-                &context.client,
+                context.client()?,
                 &mut config,
                 include_user_hint_in_url(),
                 &ui,
@@ -511,6 +546,7 @@ async fn run_command(
         | Commands::Logout
         | Commands::ShowAuthorizedUser
         | Commands::StartMcpServer
+        | Commands::Completion(_)
         | Commands::External(_) => unreachable!(),
     }
     Ok(())

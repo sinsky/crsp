@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::api::{ApiClient, ApiClientConfig, RefreshFn};
 use crate::auth::oauth_client::OAuthClient;
@@ -9,7 +9,8 @@ use crate::error::CrspError;
 
 pub struct Clasp {
     pub config: ProjectConfig,
-    pub client: ApiClient,
+    client: OnceLock<Result<ApiClient, String>>,
+    client_config: ApiClientConfig,
     pub store: CredentialStore,
     pub credentials: Option<StoredCredentials>,
     pub user: String,
@@ -107,17 +108,27 @@ impl Clasp {
                 Ok(access_token)
             })
         });
-        let client = ApiClient::new(ApiClientConfig {
+        let client_config = ApiClientConfig {
             token_expiry: Some(expiry_cell),
             ..ApiClientConfig::new(token, refresh)
-        })?;
+        };
         Ok(Arc::new(Self {
             config,
-            client,
+            client: OnceLock::new(),
+            client_config,
             store,
             credentials,
             user: user.to_string(),
         }))
+    }
+
+    pub fn client(&self) -> Result<&ApiClient, CrspError> {
+        self.client
+            .get_or_init(|| {
+                ApiClient::new(self.client_config.clone()).map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|message| CrspError::Config(message.clone()))
     }
 }
 
