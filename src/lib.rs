@@ -43,6 +43,7 @@ pub fn run(cli: &Cli) -> Result<(), CrspError> {
             program.print_help().map_err(CrspError::Io)?;
             Err(CrspError::Validation(crate::i18n::unknown_command(command)))
         }
+        Some(Commands::Completion(args)) => run_completion(args),
         Some(_) => runtime().block_on(run_async(cli)),
     }
 }
@@ -67,6 +68,40 @@ async fn run_async(cli: &Cli) -> Result<(), CrspError> {
         Some(command) => run_command(cli, command, context).await,
         None => unreachable!(),
     }
+}
+
+fn run_completion(args: &CompletionArgs) -> Result<(), CrspError> {
+    use clap::CommandFactory as _;
+    use clap_complete::{generate, shells};
+    let mut program = Cli::command();
+    let mut stdout = std::io::stdout();
+    match args.shell {
+        CompletionShell::Bash => generate(
+            shells::Bash,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Zsh => generate(
+            shells::Zsh,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Fish => generate(
+            shells::Fish,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+        CompletionShell::Powershell => generate(
+            shells::PowerShell,
+            &mut program,
+            crate::constants::PROJECT_NAME,
+            &mut stdout,
+        ),
+    }
+    Ok(())
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -511,6 +546,7 @@ async fn run_command(
         | Commands::Logout
         | Commands::ShowAuthorizedUser
         | Commands::StartMcpServer
+        | Commands::Completion(_)
         | Commands::External(_) => unreachable!(),
     }
     Ok(())
