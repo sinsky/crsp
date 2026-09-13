@@ -4,6 +4,23 @@ Rust port of [clasp](https://github.com/google/clasp) — develop Apps Script pr
 
 ## Install
 
+### npm (recommended)
+
+```sh
+npm install -g @sinsky-gh/crsp
+```
+
+Requires Node.js 18 or later. Prebuilt binaries are included for
+darwin-arm64, darwin-x64, linux-x64, linux-arm64, and win32-x64.
+
+Or run without installing:
+
+```sh
+npx @sinsky-gh/crsp --version
+```
+
+### cargo
+
 ```sh
 cargo install google-clasp-rs
 ```
