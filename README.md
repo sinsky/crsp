@@ -100,7 +100,7 @@ crsp completion powershell | Out-String | Invoke-Expression
 
 ## Compatibility
 
-The local `clasp` files (`.clasp.json`, `.clasprc.json`, `appsscript.json`, `.claspignore`) are compatible with `clasp`. The only intentional display change is the MCP server display name: `Crsp` instead of `Clasp`.
+The local `@google/clasp` files (`.clasp.json`, `.clasprc.json`, `appsscript.json`, `.claspignore`) are compatible with `clasp`. Credentials created by `clasp login` (`~/.clasprc.json` by default) work as-is — no re-login needed; point at them with `-A/--auth` or `clasp_config_auth` if stored elsewhere. The only intentional display change is the MCP server display name: `Crsp` instead of `Clasp`.
 
 ## Versioning
 
