@@ -2,6 +2,21 @@
 
 All notable changes to `crsp` are documented in this file.
 
+## 0.1.2
+
+### Added
+
+- `completion <shell>` command generating shell completion scripts for bash, zsh, fish, and powershell (`clap_complete`).
+- Interactive `create-script` prompts (script type, title, parent ID, root directory) when invoked without arguments.
+- npm install instructions in README.
+
+### Changed
+
+- `pull` fetches remote content under a spinner and reports same-line write progress (`Pulling files... N/T`).
+- `open-web-app` fetches deployments under a spinner.
+- `ApiClient` is lazily initialized on first use (`OnceLock`).
+- Preselect the default option in interactive selectors; clasp credentials (`~/.clasprc.json`) documented as working as-is.
+
 ## 0.1.1
 
 ### Added

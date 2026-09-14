@@ -1,6 +1,6 @@
 {
   "name": "@sinsky-gh/crsp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "crsp - The Apps Script CLI (Rust port of google/clasp)",
   "publishConfig": {
     "access": "public"
@@ -9,11 +9,11 @@
     "crsp": "bin/crsp.js"
   },
   "optionalDependencies": {
-    "@sinsky-gh/crsp-darwin-arm64": "0.1.1",
-    "@sinsky-gh/crsp-darwin-x64": "0.1.1",
-    "@sinsky-gh/crsp-linux-x64": "0.1.1",
-    "@sinsky-gh/crsp-linux-arm64": "0.1.1",
-    "@sinsky-gh/crsp-win32-x64": "0.1.1"
+    "@sinsky-gh/crsp-darwin-arm64": "0.1.2",
+    "@sinsky-gh/crsp-darwin-x64": "0.1.2",
+    "@sinsky-gh/crsp-linux-x64": "0.1.2",
+    "@sinsky-gh/crsp-linux-arm64": "0.1.2",
+    "@sinsky-gh/crsp-win32-x64": "0.1.2"
   },
   "files": [
     "bin",
