@@ -102,7 +102,7 @@ jobs:
           cp -r npm-artifacts/npm-bin-x86_64-pc-windows-msvc/. npm/win32-x64/bin/
           chmod +x npm/*/bin/crsp-bin 2>/dev/null || true
           ls -R npm/*/bin
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
